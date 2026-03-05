@@ -1,0 +1,33 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    depends_on:
+      - clamav
+      - rspamd
+    environment:
+      - CLAMAV_HOST=clamav
+      - RSPAMD_HOST=rspamd
+
+  clamav:
+    image: clamav/clamav:stable
+    restart: always
+    volumes:
+      - clamav_db:/var/lib/clamav
+
+  rspamd:
+    image: rspamd/rspamd:latest
+    restart: always
+    depends_on:
+      - redis
+    volumes:
+      - rspamd_config:/var/lib/rspamd
+
+  redis:
+    image: redis:7-alpine
+    restart: always
+
+volumes:
+  clamav_db:
+  rspamd_config:

@@ -55,6 +55,11 @@ services:
       - redis_data:/data
     networks:
       - mailsec
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
 volumes:
   clamav_db:

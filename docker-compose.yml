@@ -42,7 +42,7 @@ services:
     expose:
       - 11333
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11334"]
+      test: ["CMD", "rspamadm", "control", "stat"]
       interval: 30s
       timeout: 10s
       retries: 5

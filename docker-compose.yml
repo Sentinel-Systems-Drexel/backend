@@ -4,9 +4,9 @@ services:
     restart: unless-stopped
     depends_on:
       clamav:
-        condidion: service-healthy
+        condition: service_healthy
       rspamd:
-        condition: service-healthy
+        condition: service_healthy
     environment:
       - CLAMAV_HOST=clamav
       - RSPAMD_HOST=rspamd

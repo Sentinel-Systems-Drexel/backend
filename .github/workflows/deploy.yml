@@ -27,12 +27,12 @@ jobs:
           rsync -az --delete \
             --exclude='.git' \
             --exclude='node_modules' \
-            ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/myapp/
+            ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/repos/
 
       - name: Deploy via Docker Compose
         run: |
           ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
-            cd /opt/myapp
+            cd /opt/repos
             docker compose pull
             docker compose up -d --build --remove-orphans
             docker image prune -f

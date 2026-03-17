@@ -3,3 +3,6 @@ email-analysis-data/*
 
 # environment variables
 .env
+
+# Python cache files
+*/__pycache__

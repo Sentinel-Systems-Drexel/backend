@@ -1,6 +1,7 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from email import policy
 from email.parser import BytesParser
 from email.message import Message, EmailMessage
@@ -18,20 +19,15 @@ import pyclamd
 RSPAMD_HOST = os.getenv("RSPAMD_HOST", "rspamd")
 CLAMAV_HOST = os.getenv("CLAMAV_HOST", "clamav")
 EMAIL_ANALYSIS_DIR = Path(os.getenv("EMAIL_ANALYSIS_DIR", "/data/email-analysis"))
-IPINFO_TOKEN = os.getenv("IPINFO_TOKEN")
-ipinfo_handler = None
-ipinfo_error = None
+CACHE_MAPS = os.getenv("CACHE_MAPS", "true").lower() == "true"
+MAP_CACHE_DIR = EMAIL_ANALYSIS_DIR / "maps_cache"
+MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 
 
 app = FastAPI(title="Python Orch Layer", version="0.0.1")
 
-# Initialize Ipinfo Lite handler with API token from environment variable
-if IPINFO_TOKEN:
-    try:
-        import ipinfo
-        ipinfo_handler = ipinfo.getHandlerLite(access_token=IPINFO_TOKEN)
-    except ImportError as e:
-        ipinfo_error = str(e)
+app.mount("/analysis-results", StaticFiles(directory=str(EMAIL_ANALYSIS_DIR)), name="analysis")
 
 # Initialize CORS middleware to allow requests from any origin (for testing purposes)
 app.add_middleware(
@@ -144,23 +140,71 @@ def extract_sender_ips(msg: Message) -> List[str]:
     return sender_ips
 
 async def analyze_sender_ip(ip: str) -> dict:
-    if not IPINFO_TOKEN:
-        return {"ip": ip, "error": "IPINFO_TOKEN is not configured"}
-
-    if ipinfo_handler is None:
-        detail = "ipinfo is not installed"
-        if ipinfo_error:
-            detail = f"{detail}: {ipinfo_error}"
-        return {"ip": ip, "error": detail}
-
     try:
-        response = await asyncio.to_thread(ipinfo_handler.getDetails, ip)
-        details = response.all if isinstance(response.all, dict) else {}
-        if "ip" not in details:
-            details["ip"] = ip
+        url = (
+            f"http://ip-api.com/json/{ip}"
+            "?fields=status,message,continent,country,regionName,city,lat,lon,isp,org,as,reverse,mobile,proxy,hosting,query"
+        )
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            response.raise_for_status()
+
+        details = response.json()
+        if not isinstance(details, dict):
+            return {"query": ip, "error": "Unexpected response format from ip-api"}
+
+        if details.get("status") != "success":
+            return {
+                "query": ip,
+                "status": details.get("status", "fail"),
+                "message": details.get("message", "Unknown error"),
+            }
+
         return details
     except Exception as e:
-        return {"ip": ip, "error": str(e)}
+        return {"query": ip, "error": str(e)}
+
+async def get_map_for_ip(ip: str, lat: float, lon: float, email_id: str, current_analysis_dir: Path):
+    """
+    Handles Mapbox logic with a global cache toggle.
+    """
+    # 1. Define the global cache path based on IP (so multiple emails can share it)
+    cache_filename = f"map_{ip.replace(':', '_')}.png"
+    global_cache_path = MAP_CACHE_DIR / cache_filename
+    
+    # 2. Target path inside the specific email's folder
+    report_map_path = current_analysis_dir / f"map-{email_id}.png"
+
+    # 3. Check if we can use the cache
+    if CACHE_MAPS and global_cache_path.exists():
+        # Copy from global cache to the specific report folder
+        report_map_path.write_bytes(global_cache_path.read_bytes())
+        return str(report_map_path)
+
+    # 4. Fetch from Mapbox if not cached or if caching is disabled
+    url = f"https://api.mapbox.com/styles/v1/mapbox/outdoors-v12/static/pin-s+ff0000({lon},{lat})/{lon},{lat},8.3/600x400@2x"
+    params = { 
+                "access_token": MAPBOX_TOKEN,
+                "logo": "false",
+                "attribution": "false",
+              }
+
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, params=params, timeout=10.0)
+            if response.status_code == 200:
+                # Save to specific report folder
+                report_map_path.write_bytes(response.content)
+                
+                # If caching is enabled, also save to global cache
+                if CACHE_MAPS:
+                    global_cache_path.write_bytes(response.content)
+                
+                return str(report_map_path)
+        except Exception as e:
+            print(f"Mapbox error: {e}")
+    
+    return None
 
 def extract_body(msg: Message) -> str:
     '''
@@ -250,7 +294,7 @@ def save_attachments(msg: Message, attachments_dir: Path) -> List[dict]:
     return saved_files
 
 
-def scan_attachment_clamav(filename: str, data: bytes) -> dict:
+def scan_attachment_clamav(data: bytes) -> dict:
     """
     Scan a single attachment's bytes with ClamAV.
     Returns {"status": "clean"} or {"status": "infected", "threat": "<name>"}
@@ -262,7 +306,7 @@ def scan_attachment_clamav(filename: str, data: bytes) -> dict:
         if result is None:
             return {"status": "clean"}
         # pyclamd returns {"stream": ("FOUND", "<virus_name>")} on a hit
-        _, (status, threat) = list(result.items())[0]
+        status, threat = next(iter(result.values()))
         if status == "FOUND":
             return {"status": "infected", "threat": threat}
         return {"status": "clean"}
@@ -302,6 +346,43 @@ async def parse_email(file: UploadFile = File(...)):
             sender_ip_details = await asyncio.gather(
                 *(analyze_sender_ip(ip) for ip in sender_ips)
             )
+
+            # Create map for each sender IP
+            map_tasks = []
+            for details in sender_ip_details:
+                lat = details.get("lat")
+                lon = details.get("lon")
+                query_ip = details.get("query")
+
+                if lat and lon and query_ip:
+                    # Queue up map generation
+                    map_tasks.append(get_map_for_ip(query_ip, lat, lon, email_id, main_dir))
+                else:
+                    # If no coordinates, just return None for the map
+                    map_tasks.append(asyncio.sleep(0, result=None)) 
+
+            # Execute Mapbox calls in parallel
+            map_results = await asyncio.gather(*map_tasks)
+
+            for i, map_local_path in enumerate(map_results):
+                if map_local_path:
+                    # Convert "/data/email-analysis/folder/map.png" 
+                    # to "/analysis-results/folder/map.png"
+                    relative_path = Path(map_local_path).relative_to(EMAIL_ANALYSIS_DIR)
+                    sender_ip_details[i]["map_url"] = f"/analysis-results/{relative_path}"
+                else:
+                    sender_ip_details[i]["map_url"] = None
+
+            # Attach the local map path to each IP's detail dictionary
+            for i, map_path in enumerate(map_results):
+                if map_path:
+                    # Convert: /data/email-analysis/email-analysis-123/map-123.png
+                    # To: /analysis-results/email-analysis-123/map-123.png
+                    web_url = f"/analysis-results/{Path(map_path).relative_to(EMAIL_ANALYSIS_DIR)}"
+                    sender_ip_details[i]["map_url"] = web_url
+                else:
+                    sender_ip_details[i]["map_url"] = None
+
         headers_file = main_dir / f"headers-{email_id}.txt"
         with open(headers_file, "w", encoding="utf-8") as f:
             f.write(headers)

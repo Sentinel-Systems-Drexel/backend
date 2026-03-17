@@ -11,6 +11,7 @@ services:
       - CLAMAV_HOST=clamav
       - RSPAMD_HOST=rspamd
       - EMAIL_ANALYSIS_DIR=/data/email-analysis
+      - CACHE_MAPS=false
     volumes:
       - ./email-analysis-data:/data/email-analysis
     networks:

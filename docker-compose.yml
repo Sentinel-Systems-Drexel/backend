@@ -17,6 +17,7 @@ services:
       - mailsec
     ports:
       - "8000:8000"
+    env_file: .env
 
   clamav:
     image: clamav/clamav:stable

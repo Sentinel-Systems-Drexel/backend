@@ -144,9 +144,10 @@ async def parse_email(file: UploadFile = File(...)):
         # generate unique email ID
         email_id = generate_email_id()
 
-        # create main dir
-        main_dir = Path(f"email-analysis-{email_id}")
-        main_dir.mkdir(exist_ok=True)
+        # create main dir under persistent output path
+        EMAIL_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+        main_dir = EMAIL_ANALYSIS_DIR / f"email-analysis-{email_id}"
+        main_dir.mkdir(parents=True, exist_ok=True)
 
         # create attachments dir
         attachments_dir = main_dir / "attachments"

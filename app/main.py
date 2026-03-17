@@ -4,10 +4,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from email import policy
 from email.parser import BytesParser
 from email.message import Message, EmailMessage
+import json
 import os
 import uuid
+import httpx
+import re
+import asyncio
 from pathlib import Path
 from typing import List
+from ipaddress import ip_address, IPv4Address, IPv6Address
+import pyclamd
+
+RSPAMD_HOST = os.getenv("RSPAMD_HOST", "rspamd")
+CLAMAV_HOST = os.getenv("CLAMAV_HOST", "clamav")
+EMAIL_ANALYSIS_DIR = Path(os.getenv("EMAIL_ANALYSIS_DIR", "/data/email-analysis"))
+IPINFO_TOKEN = os.getenv("IPINFO_TOKEN")
+ipinfo_handler = None
+ipinfo_error = None
 
 
 app = FastAPI(title="Python Orch Layer", version="0.0.1")

@@ -50,6 +50,7 @@ async def scan_with_rspamd(raw_email: bytes) -> dict:
         "scores" : {
             "DATE_IN_PAST": 0.0,
             "DATE_IN_FUTURE": 0.0,
+            "HFILTER_HOSTNAME_UNKNOWN": 0.0,
         }
     }
 

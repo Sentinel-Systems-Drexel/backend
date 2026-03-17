@@ -1,1 +1,5 @@
+# analysis files
 email-analysis-data/*
+
+# environment variables
+.env

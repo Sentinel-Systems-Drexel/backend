@@ -341,8 +341,16 @@ async def parse_email(file: UploadFile = File(...)):
                 "from": msg.get("From", "Unknown"),
                 "to": msg.get("To", "Unknown"),
                 "date": msg.get("Date", "Unknown"),
+                "sender_ips": sender_ip_details,
                 "attachment_count": len(saved_attachments),
-            }
+            },
+            "rspamd": {
+                "score": rspamd_result.get("score"),
+                "action": rspamd_result.get("action"),
+                "symbols": rspamd_result.get("symbols", {}),   # WAS >> "symbols": list(rspamd_result.get("symbols", {}).keys()), << Just returned the keys, now returns scores as well.
+                "error": rspamd_result.get("error"),
+            },
+            "clamav": clamav_results,  # Add ClamAV results to response
         }
 
         return JSONResponse(content=response)

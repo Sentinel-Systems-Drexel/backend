@@ -202,7 +202,7 @@ def extract_body(msg: Message) -> str:
     return "\n".join(body_parts) if body_parts else "No body content found"
 
 
-def save_attachments(msg: Message, attachments_dir: Path) -> List[str]:
+def save_attachments(msg: Message, attachments_dir: Path) -> List[dict]:
     """
     Docstring for save_attachments
     
@@ -233,16 +233,40 @@ def save_attachments(msg: Message, attachments_dir: Path) -> List[str]:
                         x += 1
 
                     try:
-                        with open(filepath, 'wb') as f:
-                            payload = part.get_payload(decode=True)
-                            if isinstance(payload, bytes):
-                                if payload:
-                                    f.write(payload)
-                                    saved_files.append(str(filepath.name))
+                        payload = part.get_payload(decode=True)
+                        if isinstance(payload, bytes) and payload:
+                            with open(filepath, "wb") as f:
+                                f.write(payload)
+                            # ---- ClamAV scan ----
+                            clamav_result = scan_attachment_clamav(filepath.name, payload)
+                            saved_files.append({
+                                "filename": filepath.name,
+                                "clamav": clamav_result,
+                            })
                     except Exception as e:
                         print(f"Error saving attachment {filename}: {str(e)}")
 
     return saved_files
+
+
+def scan_attachment_clamav(filename: str, data: bytes) -> dict:
+    """
+    Scan a single attachment's bytes with ClamAV.
+    Returns {"status": "clean"} or {"status": "infected", "threat": "<name>"}
+    or {"status": "error", "detail": "<msg>"} if the daemon is unreachable.
+    """
+    try:
+        cd = pyclamd.ClamdNetworkSocket(host=CLAMAV_HOST, port=3310)
+        result = cd.scan_stream(data)
+        if result is None:
+            return {"status": "clean"}
+        # pyclamd returns {"stream": ("FOUND", "<virus_name>")} on a hit
+        _, (status, threat) = list(result.items())[0]
+        if status == "FOUND":
+            return {"status": "infected", "threat": threat}
+        return {"status": "clean"}
+    except pyclamd.ConnectionError as e:
+        return {"status": "error", "detail": str(e)}
 
 
 @app.post("/parse-email")

@@ -12,7 +12,15 @@ from typing import List
 
 app = FastAPI(title="Python Orch Layer", version="0.0.1")
 
+# Initialize Ipinfo Lite handler with API token from environment variable
+if IPINFO_TOKEN:
+    try:
+        import ipinfo
+        ipinfo_handler = ipinfo.getHandlerLite(access_token=IPINFO_TOKEN)
+    except ImportError as e:
+        ipinfo_error = str(e)
 
+# Initialize CORS middleware to allow requests from any origin (for testing purposes)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,6 +52,75 @@ def extract_headers(msg: Message) -> str:
         headers.append(f"{key}: {value}")
     return "\n".join(headers)
 
+
+def extract_sender_ips(msg: Message) -> List[str]:
+    candidate_headers = [
+        "Received", "X-Received", "Received-SPF",
+        "Authentication-Results", "ARC-Authentication-Results",
+        "X-Forefront-Antispam-Report",
+    ]
+
+    ip_pattern = re.compile(r"\b(?:\d{1,3}(?:\.\d{1,3}){3}|[A-Fa-f0-9:]{2,})\b")
+    sender_ips: List[str] = []
+    seen = set()
+
+    for header_name in candidate_headers:
+        for header_value in msg.get_all(header_name, []):
+            for raw_ip in ip_pattern.findall(header_value):
+                try:
+                    # 1. Basic normalization
+                    ip_obj = ip_address(raw_ip.split("%", 1)[0])
+
+                    # 2. Handle 6to4 Tunneling (2002::/16)
+                    # If it's a 2002: address, this extracts the embedded IPv4
+                    if isinstance(ip_obj, IPv6Address) and ip_obj.sixtofour:
+                        ip_obj = ip_obj.sixtofour
+                    
+                    # 3. Handle IPv4-Mapped IPv6 (::ffff:192.168.1.1)
+                    if isinstance(ip_obj, IPv6Address) and ip_obj.ipv4_mapped:
+                        ip_obj = ip_obj.ipv4_mapped
+
+                    # 4. Bogon Filtering (The API Saver)
+                    # This drops: 127.0.0.1, 10.x.x.x, 192.168.x.x, 169.254.x.x, etc.
+                    if any([
+                        ip_obj.is_private,      # Internal networks
+                        ip_obj.is_loopback,     # Localhost
+                        ip_obj.is_link_local,   # Self-assigned (169.254)
+                        ip_obj.is_multicast,    # Multicast groups
+                        ip_obj.is_reserved,     # Future use
+                        ip_obj.is_unspecified   # 0.0.0.0
+                    ]):
+                        continue
+
+                    normalized_ip = str(ip_obj)
+
+                    if normalized_ip not in seen:
+                        seen.add(normalized_ip)
+                        sender_ips.append(normalized_ip)
+
+                except ValueError:
+                    continue
+
+    return sender_ips
+
+async def analyze_sender_ip(ip: str) -> dict:
+    if not IPINFO_TOKEN:
+        return {"ip": ip, "error": "IPINFO_TOKEN is not configured"}
+
+    if ipinfo_handler is None:
+        detail = "ipinfo is not installed"
+        if ipinfo_error:
+            detail = f"{detail}: {ipinfo_error}"
+        return {"ip": ip, "error": detail}
+
+    try:
+        response = await asyncio.to_thread(ipinfo_handler.getDetails, ip)
+        details = response.all if isinstance(response.all, dict) else {}
+        if "ip" not in details:
+            details["ip"] = ip
+        return details
+    except Exception as e:
+        return {"ip": ip, "error": str(e)}
 
 def extract_body(msg: Message) -> str:
     '''
@@ -155,6 +232,12 @@ async def parse_email(file: UploadFile = File(...)):
 
         # Extract and save headers
         headers = extract_headers(msg)
+        sender_ips = extract_sender_ips(msg)
+        sender_ip_details = []
+        if sender_ips:
+            sender_ip_details = await asyncio.gather(
+                *(analyze_sender_ip(ip) for ip in sender_ips)
+            )
         headers_file = main_dir / f"headers-{email_id}.txt"
         with open(headers_file, "w", encoding="utf-8") as f:
             f.write(headers)

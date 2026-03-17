@@ -43,6 +43,32 @@ app.add_middleware(
 )
 
 
+async def scan_with_rspamd(raw_email: bytes) -> dict:
+    url = f"http://{RSPAMD_HOST}:11333/checkv2"
+
+    settings = {
+        "scores" : {
+            "DATE_IN_PAST": 0.0,
+            "DATE_IN_FUTURE": 0.0,
+        }
+    }
+
+    headers = {
+        "Content-Type": "message/rfc822",
+        "Flags": "extended",
+        "Settings": json.dumps(settings),
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            url,
+            content=raw_email,
+            headers=headers,
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return response.json()
+
 def generate_email_id() -> str:
     '''
     Generate unique email ID
@@ -263,6 +289,18 @@ async def parse_email(file: UploadFile = File(...)):
         
         # extract and save attachments
         saved_attachments = save_attachments(msg, attachments_dir)
+
+        # scan with rspamd
+        try:
+            rspamd_result = await scan_with_rspamd(content)
+        except Exception as e:
+            rspamd_result = {"error": str(e)}
+
+        # Build clamav summary from results already collected in save_attachments()
+        clamav_results = {
+            a["filename"]: a["clamav"]
+            for a in saved_attachments
+        }
 
         # response
         response = {

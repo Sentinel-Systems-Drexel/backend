@@ -431,38 +431,33 @@ async def parse_email(file: UploadFile = File(...)):
             # Always return IP intelligence for all sender IPs, but only map one IP:
             # the first result that has reverse DNS and coordinates.
             for details in sender_ip_details:
+                details["map_url"] = None
+
+            map_target_index = None
+            for i, details in enumerate(sender_ip_details):
+                reverse_dns = str(details.get("reverse") or "").strip()
                 lat = details.get("lat")
                 lon = details.get("lon")
                 query_ip = details.get("query")
 
-                if lat and lon and query_ip:
-                    # Queue up map generation
-                    map_tasks.append(get_map_for_ip(query_ip, lat, lon, email_id, main_dir))
-                else:
-                    # If no coordinates, just return None for the map
-                    map_tasks.append(asyncio.sleep(0, result=None)) 
+                if reverse_dns and lat is not None and lon is not None and query_ip:
+                    map_target_index = i
+                    break
 
-            # Execute Mapbox calls in parallel
-            map_results = await asyncio.gather(*map_tasks)
-
-            for i, map_local_path in enumerate(map_results):
-                if map_local_path:
-                    # Convert "/data/email-analysis/folder/map.png" 
-                    # to "/analysis-results/folder/map.png"
-                    relative_path = Path(map_local_path).relative_to(EMAIL_ANALYSIS_DIR)
-                    sender_ip_details[i]["map_url"] = f"/analysis-results/{relative_path}"
-                else:
-                    sender_ip_details[i]["map_url"] = None
-
-            # Attach the local map path to each IP's detail dictionary
-            for i, map_path in enumerate(map_results):
+            if map_target_index is not None:
+                target = sender_ip_details[map_target_index]
+                map_path = await get_map_for_ip(
+                    target["query"],
+                    target["lat"],
+                    target["lon"],
+                    email_id,
+                    main_dir,
+                )
                 if map_path:
                     # Convert: /data/email-analysis/email-analysis-123/map-123.png
                     # To: /analysis-results/email-analysis-123/map-123.png
                     web_url = f"/analysis-results/{Path(map_path).relative_to(EMAIL_ANALYSIS_DIR)}"
-                    sender_ip_details[i]["map_url"] = web_url
-                else:
-                    sender_ip_details[i]["map_url"] = None
+                    sender_ip_details[map_target_index]["map_url"] = web_url
 
         headers_file = main_dir / f"headers-{email_id}.txt"
         with open(headers_file, "w", encoding="utf-8") as f:

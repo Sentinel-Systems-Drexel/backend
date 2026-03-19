@@ -197,7 +197,7 @@ def extract_sender_ips(msg: Message) -> List[str]:
                     if isinstance(ip_obj, IPv6Address) and ip_obj.ipv4_mapped:
                         ip_obj = ip_obj.ipv4_mapped
 
-                    # 4. Bogon Filtering (The API Saver)
+                    # 4. Bogon Filtering
                     # This drops: 127.0.0.1, 10.x.x.x, 192.168.x.x, 169.254.x.x, etc.
                     if any([
                         ip_obj.is_private,      # Internal networks
@@ -428,8 +428,8 @@ async def parse_email(file: UploadFile = File(...)):
                 *(analyze_sender_ip(ip) for ip in sender_ips)
             )
 
-            # Create map for each sender IP
-            map_tasks = []
+            # Always return IP intelligence for all sender IPs, but only map one IP:
+            # the first result that has reverse DNS and coordinates.
             for details in sender_ip_details:
                 lat = details.get("lat")
                 lon = details.get("lon")

@@ -10,10 +10,15 @@ services:
     environment:
       - CLAMAV_HOST=clamav
       - RSPAMD_HOST=rspamd
+      - EMAIL_ANALYSIS_DIR=/data/email-analysis
+      - CACHE_MAPS=false
+    volumes:
+      - ./email-analysis-data:/data/email-analysis
     networks:
       - mailsec
     ports:
       - "8000:8000"
+    env_file: .env
 
   clamav:
     image: clamav/clamav:stable

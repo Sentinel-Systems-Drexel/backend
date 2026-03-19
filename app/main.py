@@ -283,7 +283,7 @@ def save_attachments(msg: Message, attachments_dir: Path) -> List[dict]:
                             with open(filepath, "wb") as f:
                                 f.write(payload)
                             # ---- ClamAV scan ----
-                            clamav_result = scan_attachment_clamav(filepath.name, payload)
+                            clamav_result = scan_attachment_clamav(payload)
                             saved_files.append({
                                 "filename": filepath.name,
                                 "clamav": clamav_result,

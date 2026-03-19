@@ -65,6 +65,87 @@ async def scan_with_rspamd(raw_email: bytes) -> dict:
         )
         response.raise_for_status()
         return response.json()
+    
+def parse_rspamd_symbols(symbols: dict) -> dict:
+    """
+    Normalize the Rspamd symbols dict into a cleaner structure.
+    Each symbol value from checkv2 looks like:
+      {
+        "score": 1.5,
+        "metric_score": 1.5,
+        "description": "Some description",
+        "options": ["opt1", "opt2"]   # not always present
+      }
+    """
+    parsed = {}
+    for name, data in symbols.items():
+        if not isinstance(data, dict):
+            parsed[name] = {"score": data}
+            continue
+        parsed[name] = {
+            "score": data.get("score", 0.0),
+            "metric_score": data.get("metric_score"),
+            "description": data.get("description", ""),
+            "options": data.get("options", []),
+        }
+    return parsed
+
+def parse_rspamd_response(result: dict) -> dict:
+    """
+    Extract and normalize all useful fields from Rspamd's /checkv2 response.
+
+    Rspamd checkv2 response fields:
+      score, required_score, action       — the verdict
+      symbols                             — dict of triggered rules
+      urls, emails                        — extracted from body
+      dkim                                — DKIM result string
+      subject                             — detected/rewritten subject
+      message-id                          — Message-ID header value
+      messages                            — dict of smtp/milter messages (NOT a list)
+      milter                              — milter actions Rspamd wants to apply
+      sender_ip                           — IP Rspamd pulled from Received headers
+      headers                             — rewritten/added headers Rspamd suggests
+      groups                              — symbol groups with aggregate scores
+    """
+    if "error" in result:
+        return {"error": result["error"]}
+
+    raw_symbols = result.get("symbols", {})
+    symbols = parse_rspamd_symbols(raw_symbols) if isinstance(raw_symbols, dict) else {}
+
+    # `messages` is a dict like {"smtp_message": "..."}, not a list
+    raw_messages = result.get("messages", {})
+    messages = raw_messages if isinstance(raw_messages, dict) else {}
+
+    return {
+        # Core verdict
+        "score": result.get("score"),
+        "required_score": result.get("required_score", 15.0),
+        "action": result.get("action"),
+
+        # Rule hits
+        "symbols": symbols,
+        "groups": result.get("groups", {}),
+
+        # Extracted content
+        "urls": result.get("urls", []),
+        "emails": result.get("emails", []),
+
+        # Auth / identity
+        "dkim": result.get("dkim"),
+        "sender_ip": result.get("sender_ip"),   # Rspamd's own IP extraction
+
+        # Message metadata Rspamd saw
+        "subject": result.get("subject"),
+        "message_id": result.get("message-id"),
+
+        # Milter / SMTP instructions
+        "messages": messages,
+        "milter": result.get("milter"),
+
+        # Suggested header changes
+        "headers": result.get("headers", {}),
+    }
 
 def generate_email_id() -> str:
     '''

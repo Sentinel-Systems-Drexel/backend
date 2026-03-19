@@ -479,9 +479,10 @@ async def parse_email(file: UploadFile = File(...)):
 
         # scan with rspamd
         try:
-            rspamd_result = await scan_with_rspamd(content)
+            rspamd_raw = await scan_with_rspamd(content)
+            rspamd_parsed = parse_rspamd_response(rspamd_raw)
         except Exception as e:
-            rspamd_result = {"error": str(e)}
+            rspamd_parsed = {"error": str(e)}
 
         # Build clamav summary from results already collected in save_attachments()
         clamav_results = {
@@ -507,12 +508,7 @@ async def parse_email(file: UploadFile = File(...)):
                 "sender_ips": sender_ip_details,
                 "attachment_count": len(saved_attachments),
             },
-            "rspamd": {
-                "score": rspamd_result.get("score"),
-                "action": rspamd_result.get("action"),
-                "symbols": rspamd_result.get("symbols", {}),   # WAS >> "symbols": list(rspamd_result.get("symbols", {}).keys()), << Just returned the keys, now returns scores as well.
-                "error": rspamd_result.get("error"),
-            },
+            "rspamd": rspamd_parsed,
             "clamav": clamav_results,  # Add ClamAV results to response
         }
 

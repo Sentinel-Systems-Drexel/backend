@@ -501,7 +501,7 @@ async def parse_email(file: UploadFile = File(...)):
                 "attachments" : saved_attachments,
             },
             "summary": {
-                "subject": msg.get("Subject, No subject"),
+                "subject": msg.get("Subject", "No subject"),
                 "from": msg.get("From", "Unknown"),
                 "to": msg.get("To", "Unknown"),
                 "date": msg.get("Date", "Unknown"),

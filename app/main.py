@@ -154,7 +154,7 @@ def generate_email_id() -> str:
     :return: email_id
     :rtype: str
     '''
-    return str(uuid.uuid4())[:8]
+    return str(uuid.uuid4())[:16]
 
 
 def extract_headers(msg: Message) -> str:

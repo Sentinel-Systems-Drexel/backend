@@ -154,7 +154,7 @@ def generate_email_id() -> str:
     :return: email_id
     :rtype: str
     '''
-    return str(uuid.uuid4())[:16]
+    return str(uuid.uuid4())
 
 
 def extract_headers(msg: Message) -> str:
@@ -412,7 +412,7 @@ async def parse_email(file: UploadFile = File(...)):
 
         # create main dir under persistent output path
         EMAIL_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
-        main_dir = EMAIL_ANALYSIS_DIR / f"email-analysis-{email_id}"
+        main_dir = EMAIL_ANALYSIS_DIR / f"{email_id}"
         main_dir.mkdir(parents=True, exist_ok=True)
 
         # create attachments dir

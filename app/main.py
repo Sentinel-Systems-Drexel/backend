@@ -5,6 +5,7 @@ from fastapi.staticfiles import StaticFiles
 from email import policy
 from email.parser import BytesParser
 from email.message import Message, EmailMessage
+from pydantic import BaseModel
 import json
 import os
 import uuid
@@ -12,8 +13,9 @@ import httpx
 import re
 import asyncio
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from ipaddress import ip_address, IPv4Address, IPv6Address
+from difflib import SequenceMatcher
 import pyclamd
 
 RSPAMD_HOST = os.getenv("RSPAMD_HOST", "rspamd")

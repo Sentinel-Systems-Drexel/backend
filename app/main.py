@@ -40,6 +40,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Pydantic models
+class DiffCheckRequest(BaseModel):
+    suspicious_email_id: str
+    legitimate_email_id: str
 
 # Rspamd helpers
 async def scan_with_rspamd(raw_email: bytes) -> dict:

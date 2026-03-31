@@ -784,6 +784,25 @@ def compute_risk_assessment(
         "all_anomalies": all_anomalies,
     }
 
+def load_analysis(email_id: str) -> dict:
+    """
+    Load a previously-persisted analysis JSON by email_id.
+    Raises HTTPException 404 if not found.
+    """
+    analysis_path = EMAIL_ANALYSIS_DIR / email_id / f"analysis-{email_id}.json"
+    if not analysis_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Analysis not found for email '{email_id}'."
+        )
+    try:
+        return json.loads(analysis_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to read analysis for email '{email_id}'."
+        )
+
 
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):

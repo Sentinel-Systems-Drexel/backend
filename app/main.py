@@ -441,6 +441,72 @@ def _extract_email_address(address: str) -> str:
     match = re.search(r"[\w.+-]+@[\w.-]+", address)
     return match.group(0).lower() if match else address.strip().lower()
 
+def compare_identity_headers(suspicious: dict, legitimate: dict) -> dict:
+    """
+    Compare identity-related headers (From, Reply-To, Return-Path, Sender)
+    between the suspicious and legitimate emails.
+ 
+    Flags mismatches in both the full address and the domain, which is the
+    primary indicator of a spoofing or impersonation attempt.
+    """
+    results = {}
+    suspicious_summary = suspicious.get("summary", {})
+    legitimate_summary = legitimate.get("summary", {})
+
+    # Build quick lookup from the raw header files for headers not in summary
+    suspicious_headers = _parse_header_file(suspicious)
+    legitimate_headers = _parse_header_file(legitimate)
+
+    for header in _IDENTITY_HEADERS:
+        # Get values from summary (FROM/TO/DATE) or fall back to raw headers
+        if header == "From":
+            suspicious_value = suspicious_summary.get("from", "")
+            legitimate_value = legitimate_summary.get("from", "")
+        else:
+            suspicious_value = suspicious_headers.get(header, "")
+            legitimate_value = legitimate_headers.get(header, "")
+
+        suspicious_address = _extract_email_address(suspicious_value)
+        legitimate_address = _extract_email_address(legitimate_value)
+
+        suspicious_domain = _extract_domain(suspicious_value)
+        legitimate_domain = _extract_domain(legitimate_value)
+
+        header_result = {
+            "suspicious": suspicious_value,
+            "legitimate": legitimate_value,
+            "address_match": suspicious_address == legitimate_address,
+            "domain_match": suspicious_domain == legitimate_domain,
+            "suspicious_domain": suspicious_domain,
+            "legitimate_domain": legitimate_domain
+        }
+
+        anomalies = []
+        if legitimate_address and suspicious_address and not header_result["address_match"]:
+            if header_result["domain_match"]:
+                anomalies.append(f"Same sender domain but different addresses: {suspicious_address} vs {legitimate_address}.")
+            else:
+                anomalies.append(f"Different sender domain: {suspicious_domain} vs {legitimate_domain}.")
+        elif legitimate_address and not suspicious_address:
+            anomalies.append(f"{header} present in legitimate email but missing in suspicious email.")
+        elif suspicious_address and not legitimate_address:
+            anomalies.append(f"{header} present in suspicious email but missing in legitimate email.")
+
+        header_result["anomalies"] = anomalies
+        results[header] = header_result
+
+        # Cross-header consistency: does From domain match Return-Path domain is suspicious email?
+        suspicious_from_domain = _extract_domain(suspicious_summary.get("from", ""))
+        suspicious_return_path_domain = _extract_domain(suspicious_headers.get("Return-Path", ""))
+        if suspicious_from_domain and suspicious_return_path_domain and suspicious_from_domain != suspicious_return_path_domain:
+            results["_cross_header_anomalies"] = [
+                f"Suspicious email From domain ({suspicious_from_domain}) differs from Return-Path domain ({suspicious_return_path_domain}) - possible envelope spoofing."
+            ]
+        else:
+            results["_cross_header_anomalies"] = []
+        
+        return results
+
 
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):

@@ -679,6 +679,49 @@ def compare_ip_geo(suspicious: dict, legitimate: dict) -> dict:
         "anomalies": anomalies,
     }
 
+def compare_body_similarity(suspicious: dict, legitimate: dict) -> dict:
+    """
+    Lightweight body similarity check using SequenceMatcher.
+    This is secondary to the header/auth/IP checks but can surface
+    template cloning attempts.
+    """
+    suspicious_body_path = suspicious.get("files_created", {}).get("body", "")
+    legitimate_body_path = legitimate.get("files_created", {}).get("body", "")
+
+    suspicious_body = ""
+    legitimate_body = ""
+
+    if suspicious_body_path and Path(suspicious_body_path).exists():
+        suspicious_body = Path(suspicious_body_path).read_text(encoding="utf-8", errors="ignore")
+    if legitimate_body_path and Path(legitimate_body_path).exists():
+        legitimate_body = Path(legitimate_body_path).read_text(encoding="utf-8", errors="ignore")
+    
+    if not suspicious_body or not legitimate_body:
+        return {
+            "similarity_ratio": None,
+            "note": "One or both emails bodies could not be read.",
+        }
+    
+    ratio = SequenceMatcher(None, suspicious_body, legitimate_body).ratio()
+
+    interpretation = "low"
+    if ratio >= 0.9:
+        interpretation = "very_high"
+    elif ratio >= 0.7:
+        interpretation = "high"
+    elif ratio >= 0.4:
+        interpretation = "moderate"
+
+    return {
+        "similarity_ratio": round(ratio, 4),
+        "interpretation": interpretation,
+        "note": (
+            "Very high similarity may indicate the suspicious email cloned "
+            "the legitimate email's template or content."
+            if ratio >= 0.7 else None
+        )
+    }
+
 
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):

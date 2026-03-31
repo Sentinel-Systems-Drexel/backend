@@ -924,9 +924,11 @@ async def parse_email(file: UploadFile = File(...)):
 
         return JSONResponse(content=response)
     
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error parsing email: {str(e)}")
-
+    
 
 @app.get("/")
 def read_root():

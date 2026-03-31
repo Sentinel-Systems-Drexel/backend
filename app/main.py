@@ -930,6 +930,63 @@ async def parse_email(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Error parsing email: {str(e)}")
     
 
+@app.post("/diff-check")
+async def diff_check(request: DiffCheckRequest):
+    """
+    Compare a suspicious email against a known-legitimate email.
+ 
+    Both emails must have been previously parsed via /parse-email.
+    Provide their email_id values in the request body.
+ 
+    The comparison focuses on:
+      1. Identity header spoofing (From, Reply-To, Return-Path, Sender)
+      2. Authentication divergence (DKIM, SPF, DMARC via Rspamd symbols)
+      3. Sender IP / geolocation divergence
+      4. Body similarity (lightweight, secondary signal)
+ 
+    Returns a structured diff report with per-category anomalies and
+    an overall risk assessment.  The report is also persisted to disk
+    alongside the suspicious email's analysis directory.
+    """
+    suspicious = load_analysis(request.suspicious_email_id)
+    legitimate = load_analysis(request.legitimate_email_id)
+
+    # Run comparisons
+    header_diff = compare_identity_headers(suspicious, legitimate)
+    auth_diff = compare_auth_results(suspicious, legitimate)
+    ip_diff = compare_ip_geo(suspicious, legitimate)
+    body_sim = compare_body_similarity(suspicious, legitimate)
+    risk = compute_risk_assessment(header_diff, auth_diff, ip_diff, body_sim)
+
+    diff_report = {
+        "status": "success",
+        "suspicious_email_id": request.suspicious_email_id,
+        "legitimate_email_id": request.legitimate_email_id,
+        "header_comparison": header_diff,
+        "auth_comparison": auth_diff,
+        "ip_geo_comparison": ip_diff,
+        "body_similarity": body_sim,
+        "risk_assessment": risk,
+    }
+
+    # Persist the diff report to suspicous email's directory
+    suspicious_dir = EMAIL_ANALYSIS_DIR / request.suspicious_email_id
+    if suspicious_dir.exists():
+        diff_file = suspicious_dir / f"diff-{request.suspicious_email_id}.json"
+        try:
+            diff_file.write_text(
+                json.dumps(diff_report, indent=2, default=str),
+                encoding="utf-8",
+            )
+            diff_report["diff_report_path"] = str(diff_file)
+        except Exception as e:
+            diff_report["diff_report_path"] = None
+            diff_report["diff_save_error"] = str(e)
+
+    return JSONResponse(content=diff_report)
+        
+
+
 @app.get("/")
 def read_root():
     return {

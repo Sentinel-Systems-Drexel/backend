@@ -916,6 +916,12 @@ async def parse_email(file: UploadFile = File(...)):
             "clamav": clamav_results,  # Add ClamAV results to response
         }
 
+        analysis_file = main_dir / f"analysis-{email_id}.json"
+        analysis_file.write_text(
+            json.dumps(response, indent=2, default=str),
+            encoding="utf-8"
+        )
+
         return JSONResponse(content=response)
     
     except Exception as e:

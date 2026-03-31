@@ -722,6 +722,68 @@ def compare_body_similarity(suspicious: dict, legitimate: dict) -> dict:
         )
     }
 
+def compute_risk_assessment(
+    header_diff: dict,
+    auth_diff: dict,
+    ip_diff: dict,
+    body_sim: dict,
+) -> dict:
+    """
+    Produce a summary risk assessment based on all comparison axes.
+    Collects all anomalies and assigns a simple risk level.
+    """
+    all_anomalies = []
+
+    # Header anomalies
+    for header_name, data in header_diff.items():
+        if header_name.startswith("_"):
+            all_anomalies.extend(data)
+        elif isinstance(data, dict):
+            all_anomalies.extend(data.get("anomalies", []))
+
+    # Auth anomalies
+    all_anomalies.extend(auth_diff.get("anomalies", []))
+
+    # IP/Geo anomalies
+    all_anomalies.extend(ip_diff.get("anomalies", []))
+
+    # Body cloning signal
+    sim_ratio = body_sim.get("similarity_ratio")
+    if sim_ratio is not None and sim_ratio >= 0.7:
+        all_anomalies.append(f"Email body is {round(sim_ratio * 100, 1)}% similar to the legitimate email - possible template cloning.")
+
+    # TODO Simple risk score 
+    risk_score = len(all_anomalies)
+
+    # Boost score for strong signals
+    if not ip_diff.get("ip_overlap", True):
+        risk_score += 2
+    
+    score_delta = auth_diff.get("score_delta")
+    if score_delta is not None and score_delta > 5:
+        risk_score += 3
+    
+    if risk_score == 0:
+        level = "low"
+        verdict = "No significant differences detected between emails."
+    elif risk_score <= 3:
+        level = "medium"
+        verdict = "Some differences detected. Proceed with caution."
+    elif risk_score <=6:
+        level = "high"
+        verdict = "Multiple anomalies detected. This email shows signs of spoofing an impersonation."
+    else:
+        level = "critical"
+        verdict = "Strong indicators of spoofing or impersonation detected. This email is most likely fraudulent."
+
+    return {
+        "risk_level": level,
+        "risk_score": risk_score,
+        "verdict": verdict,
+        "total_anomalies": len(all_anomalies),
+        "all_anomalies": all_anomalies,
+    }
+
 
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):

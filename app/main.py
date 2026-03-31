@@ -524,6 +524,72 @@ def _parse_header_file(analysis: dict) -> dict:
             pass
     return result
 
+def compare_auth_results(suspicious: dict, legitimate: dict) -> dict:
+    """
+    Compare authentication related Rspamd symbols between both emails.
+
+    Looks at DKIM, SPF, DMARC, ARC results and spoofing/forging indicators.
+    """
+    suspicious_symbols = suspicious.get("rspamd", {}).get("symbols", {})
+    legitimate_symbols = legitimate.get("rspamd", {}).get("symbols", {})
+
+    # Extract auth related symbols
+    suspicious_auth = {k: v for k, v in suspicious_symbols.items() if any(k.startswith(p) for p in _AUTH_SYMBOL_PREFIXES)}
+    legitimate_auth = {k: v for k, v in legitimate_symbols.items() if any(k.startswith(p) for p in _AUTH_SYMBOL_PREFIXES)}
+
+    all_auth_keys = sorted(set(suspicious_auth) | set(legitimate_auth))
+
+    comparison = {}
+    anomalies = []
+
+    for symbol in all_auth_keys:
+        in_suspicious = symbol in suspicious_auth
+        in_legitimate = symbol in legitimate_auth
+
+        entry = {
+            "in_suspicious": in_suspicious,
+            "in_legitimate": in_legitimate,
+        }
+
+        if in_suspicious:
+            entry["suspicious_score"] = suspicious_auth[symbol].get("score", 0)
+            entry["suspicious_description"] = suspicious_auth[symbol].get("description", "")
+        if in_legitimate:
+            entry["legitimate_score"] = legitimate_auth[symbol].get("score", 0)
+            entry["legitimate_description"] = legitimate_auth[symbol].get("description", "")
+
+        # Flag symbols that only appear in the suspicious email with positive score
+
+        if in_suspicious and not in_legitimate:
+            score = suspicious_auth[symbol].get("score", 0)
+            if score > 0:
+                anomalies.append(
+                    f"{symbol}, triggered only is suspicious email (score: {score}), {suspicious_auth[symbol].get('description', '')}."
+                )
+
+        # Flag auth passes in legitimate email that are absent/fail in suspicious email
+        if in_legitimate and not in_suspicious:
+            score = legitimate_auth[symbol].get("score", 0)
+            if score < 0:
+                anomalies.append(
+                    f"{symbol} passed in legitimate email but absent in suspicious email."
+                )
+        
+        comparison[symbol] = entry
+
+    suspicious_score = suspicious.get("rspamd", {}).get("score")
+    legitimate_score = legitimate.get("rspamd", {}).get("score")
+
+    return {
+        "symbols": comparison,
+        "suspicious_total_score": suspicious_score,
+        "legitimate_total_score": legitimate_score,
+        "score_delta": round(suspicious_score - legitimate_score, 2) if suspicious_score is not None and legitimate_score is not None else None,
+        "suspicious_action": suspicious.get("rspamd", {}).get("action"),
+        "legitimate_action": legitimate.get("rspamd", {}).get("action"),
+        "anomalies": anomalies,
+    }
+
 
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):

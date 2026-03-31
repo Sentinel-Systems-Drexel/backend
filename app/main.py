@@ -507,6 +507,23 @@ def compare_identity_headers(suspicious: dict, legitimate: dict) -> dict:
         
         return results
 
+def _parse_header_file(analysis: dict) -> dict:
+    """
+    Read the saved headers file and return a dict of header_name -> last_value.
+    """
+    headers_path = analysis.get("files_created", {}).get("headers", "")
+    result = {}
+    if headers_path and Path(headers_path).exists():
+        try:
+            text = Path(headers_path).read_text(encoding="utf-8", errors="ignore")
+            for line in text.splitlines():
+                if ": " in line:
+                    key, _, value = line.partition(": ")
+                    result[key.strip()] = value.strip()
+        except Exception:
+            pass
+    return result
+
 
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):

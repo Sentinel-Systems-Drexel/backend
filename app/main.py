@@ -432,6 +432,15 @@ def _extract_domain(address: str) -> str:
     match = re.search(r"@([\w.-]+)", address)
     return match.group(1).lower() if match else ""
 
+def _extract_email_address(address: str) -> str:
+    """
+    Extract the email address from a header value.
+    """
+    if not address:
+        return ""
+    match = re.search(r"[\w.+-]+@[\w.-]+", address)
+    return match.group(0).lower() if match else address.strip().lower()
+
 
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):

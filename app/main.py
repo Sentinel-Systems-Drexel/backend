@@ -590,6 +590,95 @@ def compare_auth_results(suspicious: dict, legitimate: dict) -> dict:
         "anomalies": anomalies,
     }
 
+def compare_ip_geo(suspicious: dict, legitimate: dict) -> dict:
+    """
+    Compare sender IP addresses and their geolocation/network data
+    between suspicious and legitimate emails.
+    """
+    suspicious_ips = suspicious.get("summary", {}).get("sender_ips", [])
+    legitimate_ips = legitimate.get("summary", {}).get("sender_ips", [])
+
+    suspicious_ip_set = {d.get("query", "") for d in suspicious_ips if isinstance(d, dict)}
+    legitimate_ip_set = {d.get("query", "") for d in legitimate_ips if isinstance(d, dict)}
+
+    shared_ips = suspicious_ip_set & legitimate_ip_set
+    suspicious_only_ips = suspicious_ip_set - legitimate_ip_set
+    legitimate_only_ips = legitimate_ip_set - suspicious_ip_set
+
+    # Build lookup dicts
+    suspicious_lookup = {d["query"]: d for d in suspicious_ips if isinstance(d, dict) and "query" in d}
+    legitimate_lookup = {d["query"]: d for d in legitimate_ips if isinstance(d, dict) and "query" in d}
+
+    anomalies = []
+
+    # Compare geographic/network properties of IPs unique to suspicious email
+    geo_comparison = []
+    for ip in suspicious_only_ips:
+        details = suspicious_lookup.get(ip, {})
+        entry = {
+            "ip": ip,
+            "source": "suspicious_only",
+            "country": details.get("country"),
+            "region": details.get("regionName"),
+            "city": details.get("city"),
+            "isp": details.get("isp"),
+            "org": details.get("org"),
+            "as": details.get("as"),
+            "reverse": details.get("reverse"),
+            "proxy": details.get("proxy"),
+            "hosting": details.get("hosting"),
+        }
+        geo_comparison.append(entry)
+
+        # Flag proxy/hosting/VPN IPs in suspicious email
+        if details.get("proxy"):
+            anomalies.append(f"Suspicious IP ({ip}) is flagged as a proxy/VPN.")
+        if details.get("hosting"):
+            anomalies.append(f"Suspicious IP ({ip}) originated from a hosting provider")
+
+    for ip in legitimate_only_ips:
+        details = legitimate_lookup.get(ip, {})
+        geo_comparison.append({
+            "ip": ip,
+            "source": "legitimate_only",
+            "country": details.get("country"),
+            "region": details.get("regionName"),
+            "city": details.get("city"),
+            "isp": details.get("isp"),
+            "org": details.get("org"),
+            "as": details.get("as"),
+            "reverse": details.get("reverse"),
+            "proxy": details.get("proxy"),
+            "hosting": details.get("hosting"),
+        })
+
+    # Country / ASN Divergence
+    suspicious_countries = {d.get("country") for d in suspicious_ips if isinstance(d, dict) and d.get("country")}
+    legitimate_countries = {d.get("country") for d in legitimate_ips if isinstance(d, dict) and d.get("country")}
+    suspicious_asns = {d.get("as") for d in suspicious_ips if isinstance(d, dict) and d.get("as")}
+    legitimate_asns = {d.get("as") for d in legitimate_ips if isinstance(d, dict) and d.get("as")}
+
+    if suspicious_countries and legitimate_countries and not suspicious_countries & legitimate_countries:
+        anomalies.append(
+            f"Complete country mismatch: suspicious from {sorted(suspicious_countries)}, legitimate from {sorted(legitimate_countries)}"
+        )
+
+    if suspicious_asns and legitimate_asns and not suspicious_asns & legitimate_asns:
+        anomalies.append(
+            f"No shared ASN between suspicious ({sorted(suspicious_asns)}) and legitimate ({sorted(legitimate_asns)})."
+        )
+
+    return {
+        "shared_ips": sorted(shared_ips),
+        "suspicious_only_ips": sorted(suspicious_only_ips),
+        "legitimate_only_ips": sorted(legitimate_only_ips),
+        "ip_overlap": len(shared_ips) > 0,
+        "geo_details": geo_comparison,
+        "suspicious_countries": sorted(suspicious_countries),
+        "legitimate_countries": sorted(legitimate_countries),
+        "anomalies": anomalies,
+    }
+
 
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):

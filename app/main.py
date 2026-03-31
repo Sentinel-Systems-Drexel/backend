@@ -410,6 +410,18 @@ def scan_attachment_clamav(data: bytes) -> dict:
         return {"status": "error", "detail": str(e)}
 
 
+### Diff-Check Comparison Helpers ###
+
+# Headers for spoofing detection
+_IDENTITY_HEADERS = ["From", "Reply-To", "Return-Path", "Sender"]
+
+_AUTH_SYMBOL_PREFIXES = (
+    "DKIM", "SPF", "DMARC", "ARC",
+    "R_SPF", "R_DKIM", "R_DMARC",
+    "FORGED", "SPOOF", "FROM_NEQ_ENVFROM",
+    "MIME_FROM", "REPLYTO",
+)
+
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):
     if not file.filename or not file.filename.endswith(".eml"):

@@ -422,6 +422,17 @@ _AUTH_SYMBOL_PREFIXES = (
     "MIME_FROM", "REPLYTO",
 )
 
+def _extract_domain(address: str) -> str:
+    """
+    Extract the domain from an email address or header value.
+    """
+    if not address:
+        return ""
+    # Handle "Display Name <user@email.com> formats
+    match = re.search(r"@([\w.-]+)", address)
+    return match.group(1).lower() if match else ""
+
+
 @app.post("/parse-email")
 async def parse_email(file: UploadFile = File(...)):
     if not file.filename or not file.filename.endswith(".eml"):

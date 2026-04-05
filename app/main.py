@@ -764,16 +764,16 @@ def compute_risk_assessment(
         risk_score += 3
     
     if risk_score == 0:
-        level = "low"
+        level = "clean"
         verdict = "No significant differences detected between emails."
     elif risk_score <= 3:
-        level = "medium"
+        level = "low"
         verdict = "Some differences detected. Proceed with caution."
     elif risk_score <=6:
-        level = "high"
+        level = "medium"
         verdict = "Multiple anomalies detected. This email shows signs of spoofing an impersonation."
     else:
-        level = "critical"
+        level = "high"
         verdict = "Strong indicators of spoofing or impersonation detected. This email is most likely fraudulent."
 
     return {

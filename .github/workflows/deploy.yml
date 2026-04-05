@@ -28,6 +28,7 @@ jobs:
             --exclude='.git' \
             --exclude='node_modules' \
             --exclude='.env' \
+            --exclude='email-analysis-data' \
             ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/repos/
 
       - name: Deploy via Docker Compose

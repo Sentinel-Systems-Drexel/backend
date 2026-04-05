@@ -25,7 +25,7 @@ MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 
 
-app = FastAPI(title="Python Orch Layer", version="0.0.1")
+app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.7.0")
 
 app.mount("/analysis-results", StaticFiles(directory=str(EMAIL_ANALYSIS_DIR)), name="analysis")
 
@@ -39,10 +39,13 @@ app.add_middleware(
 )
 
 
+# Rspamd helpers
 async def scan_with_rspamd(raw_email: bytes) -> dict:
     url = f"http://{RSPAMD_HOST}:11333/checkv2"
 
+    # Create settings object
     settings = {
+        # Disable irrelevant scores
         "scores" : {
             "DATE_IN_PAST": 0.0,
             "DATE_IN_FUTURE": 0.0,
@@ -50,9 +53,11 @@ async def scan_with_rspamd(raw_email: bytes) -> dict:
         }
     }
 
+    # Create header object
     headers = {
         "Content-Type": "message/rfc822",
         "Flags": "extended",
+        # Include settings
         "Settings": json.dumps(settings),
     }
 
@@ -147,6 +152,7 @@ def parse_rspamd_response(result: dict) -> dict:
         "headers": result.get("headers", {}),
     }
 
+# Email parsing helpers
 def generate_email_id() -> str:
     '''
     Generate unique email ID
@@ -154,7 +160,7 @@ def generate_email_id() -> str:
     :return: email_id
     :rtype: str
     '''
-    return str(uuid.uuid4())[:8]
+    return str(uuid.uuid4())
 
 
 def extract_headers(msg: Message) -> str:
@@ -189,7 +195,6 @@ def extract_sender_ips(msg: Message) -> List[str]:
                     ip_obj = ip_address(raw_ip.split("%", 1)[0])
 
                     # 2. Handle 6to4 Tunneling (2002::/16)
-                    # If it's a 2002: address, this extracts the embedded IPv4
                     if isinstance(ip_obj, IPv6Address) and ip_obj.sixtofour:
                         ip_obj = ip_obj.sixtofour
                     
@@ -198,7 +203,6 @@ def extract_sender_ips(msg: Message) -> List[str]:
                         ip_obj = ip_obj.ipv4_mapped
 
                     # 4. Bogon Filtering
-                    # This drops: 127.0.0.1, 10.x.x.x, 192.168.x.x, 169.254.x.x, etc.
                     if any([
                         ip_obj.is_private,      # Internal networks
                         ip_obj.is_loopback,     # Localhost
@@ -222,18 +226,23 @@ def extract_sender_ips(msg: Message) -> List[str]:
 
 async def analyze_sender_ip(ip: str) -> dict:
     try:
+        # Url with specific fields to minimize response size and focus on relevant data
         url = (
             f"http://ip-api.com/json/{ip}"
             "?fields=status,message,continent,country,regionName,city,lat,lon,isp,org,as,reverse,mobile,proxy,hosting,query"
         )
+
+        # Use httpx with a timeout to avoid hanging on slow responses. Set a reasonable timeout just in case.
         async with httpx.AsyncClient() as client:
             response = await client.get(url, timeout=10.0)
             response.raise_for_status()
 
+        # Validate response format and content
         details = response.json()
         if not isinstance(details, dict):
             return {"query": ip, "error": "Unexpected response format from ip-api"}
 
+        # Check for API-level errors in the response
         if details.get("status") != "success":
             return {
                 "query": ip,
@@ -412,7 +421,7 @@ async def parse_email(file: UploadFile = File(...)):
 
         # create main dir under persistent output path
         EMAIL_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
-        main_dir = EMAIL_ANALYSIS_DIR / f"email-analysis-{email_id}"
+        main_dir = EMAIL_ANALYSIS_DIR / f"{email_id}"
         main_dir.mkdir(parents=True, exist_ok=True)
 
         # create attachments dir

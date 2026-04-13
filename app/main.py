@@ -235,7 +235,7 @@ async def analyze_sender_ip(ip: str) -> dict:
         # Url with specific fields to minimize response size and focus on relevant data
         url = (
             f"http://ip-api.com/json/{ip}"
-            "?fields=status,message,continent,country,regionName,city,lat,lon,isp,org,as,reverse,mobile,proxy,hosting,query"
+            "?fields=status,message,continent,country,regionName,city,lat,lon,isp,org,asname,reverse,mobile,proxy,hosting,query"
         )
 
         # Use httpx with a timeout to avoid hanging on slow responses. Set a reasonable timeout just in case.
@@ -260,7 +260,13 @@ async def analyze_sender_ip(ip: str) -> dict:
     except Exception as e:
         return {"query": ip, "error": str(e)}
 
-async def get_map_for_ip(ip: str, lat: float, lon: float, email_id: str, current_analysis_dir: Path):
+async def get_map_for_ip(
+    ip: str,
+    lat: float,
+    lon: float,
+    email_id: str,
+    current_analysis_dir: Path,
+):
     """
     Handles Mapbox logic with a global cache toggle.
     """
@@ -269,7 +275,8 @@ async def get_map_for_ip(ip: str, lat: float, lon: float, email_id: str, current
     global_cache_path = MAP_CACHE_DIR / cache_filename
     
     # 2. Target path inside the specific email's folder
-    report_map_path = current_analysis_dir / f"map-{email_id}.png"
+    safe_ip = ip.replace(":", "_")
+    report_map_path = current_analysis_dir / f"map-{email_id}-{safe_ip}.png"
 
     # 3. Check if we can use the cache
     if CACHE_MAPS and global_cache_path.exists():
@@ -837,23 +844,31 @@ async def parse_email(file: UploadFile = File(...)):
                 *(analyze_sender_ip(ip) for ip in sender_ips)
             )
 
-            # Always return IP intelligence for all sender IPs, but only map one IP:
-            # the first result that has reverse DNS and coordinates.
+            # Always return IP intelligence for all sender IPs. Map every IP that
+            # has reverse DNS and coordinates; if none do, fall back to every IP
+            # that has coordinates.
             for details in sender_ip_details:
                 details["map_url"] = None
 
-            map_target_index = None
+            reverse_dns_targets = []
+            fallback_targets = []
+
             for i, details in enumerate(sender_ip_details):
-                reverse_dns = str(details.get("reverse") or "").strip()
                 lat = details.get("lat")
                 lon = details.get("lon")
                 query_ip = details.get("query")
+                reverse_dns = str(details.get("reverse") or "").strip()
 
-                if reverse_dns and lat is not None and lon is not None and query_ip:
-                    map_target_index = i
-                    break
+                if lat is None or lon is None or not query_ip:
+                    continue
 
-            if map_target_index is not None:
+                fallback_targets.append(i)
+                if reverse_dns:
+                    reverse_dns_targets.append(i)
+
+            map_target_indices = reverse_dns_targets or fallback_targets
+
+            for map_target_index in map_target_indices:
                 target = sender_ip_details[map_target_index]
                 map_path = await get_map_for_ip(
                     target["query"],
@@ -863,8 +878,8 @@ async def parse_email(file: UploadFile = File(...)):
                     main_dir,
                 )
                 if map_path:
-                    # Convert: /data/email-analysis/email-analysis-123/map-123.png
-                    # To: /analysis-results/email-analysis-123/map-123.png
+                    # Convert: /data/email-analysis/email-analysis-123/map-123-ip.png
+                    # To: /analysis-results/email-analysis-123/map-123-ip.png
                     web_url = f"/analysis-results/{Path(map_path).relative_to(EMAIL_ANALYSIS_DIR)}"
                     sender_ip_details[map_target_index]["map_url"] = web_url
 

@@ -19,7 +19,7 @@ Notable inegrations include...
 
 We've made running your own instance of our API as simple as possible. Just follow the steps below.
 
-1. Install docker on the same host you will be running the API. Here are some reccomended installation guides.
+1. Install docker on the same host you will be running the API. Here are some recommended installation guides.
     - Ubuntu - [Digital Ocean](https://www.digitalocean.com/community/tutorials/how-to-install-and-use-docker-on-ubuntu-22-04)
 2. Clone this repository.
 ```

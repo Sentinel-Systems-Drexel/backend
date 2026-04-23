@@ -12,6 +12,8 @@ import uuid
 import httpx
 import re
 import asyncio
+import shutil
+import time
 from pathlib import Path
 from typing import List, Optional
 from ipaddress import ip_address, IPv4Address, IPv6Address
@@ -22,11 +24,15 @@ RSPAMD_HOST = os.getenv("RSPAMD_HOST", "rspamd")
 CLAMAV_HOST = os.getenv("CLAMAV_HOST", "clamav")
 EMAIL_ANALYSIS_DIR = Path(os.getenv("EMAIL_ANALYSIS_DIR", "/data/email-analysis"))
 CACHE_MAPS = os.getenv("CACHE_MAPS", "true").lower() == "true"
-MAP_CACHE_DIR = EMAIL_ANALYSIS_DIR / "maps_cache"
+MAP_CACHE_DIR = Path(
+    os.getenv("MAP_CACHE_DIR", str(EMAIL_ANALYSIS_DIR.parent / "maps_cache"))
+)
 MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 CORS_DEV_MODE = os.getenv("CORS_DEV_MODE", "false").lower() == "true"
 MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
+DATA_RETENTION_HOURS = float(os.getenv("DATA_RETENTION_HOURS", "0"))
+PURGE_INTERVAL_SECONDS = 5 * 60
 
 
 app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0")
@@ -59,6 +65,78 @@ else:
 class DiffCheckRequest(BaseModel):
     suspicious_email_id: str
     legitimate_email_id: str
+
+
+cleanup_task: Optional[asyncio.Task] = None
+
+
+def purge_expired_analysis_data() -> dict:
+    """
+    Delete expired analysis artifacts from EMAIL_ANALYSIS_DIR.
+    If DATA_RETENTION_HOURS is 0, retention is infinite and no files are deleted.
+    """
+    summary = {
+        "retention_hours": DATA_RETENTION_HOURS,
+        "deleted_directories": 0,
+        "deleted_files": 0,
+        "errors": [],
+    }
+
+    if DATA_RETENTION_HOURS <= 0:
+        return summary
+
+    if not EMAIL_ANALYSIS_DIR.exists():
+        return summary
+
+    cutoff_timestamp = time.time() - (DATA_RETENTION_HOURS * 3600)
+    legacy_maps_dir = EMAIL_ANALYSIS_DIR / "maps_cache"
+
+    for item in EMAIL_ANALYSIS_DIR.iterdir():
+        try:
+            # Never delete current or legacy map cache directory.
+            if item.resolve() in {MAP_CACHE_DIR.resolve(), legacy_maps_dir.resolve()}:
+                continue
+
+            item_age_timestamp = item.stat().st_mtime
+            if item_age_timestamp > cutoff_timestamp:
+                continue
+
+            if item.is_dir():
+                shutil.rmtree(item)
+                summary["deleted_directories"] += 1
+            elif item.is_file():
+                item.unlink()
+                summary["deleted_files"] += 1
+        except Exception as e:
+            summary["errors"].append(f"{item}: {e}")
+
+    return summary
+
+
+async def periodic_retention_cleanup() -> None:
+    while True:
+        purge_expired_analysis_data()
+        await asyncio.sleep(PURGE_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def startup_retention_worker() -> None:
+    global cleanup_task
+    EMAIL_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+    MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    purge_expired_analysis_data()
+    cleanup_task = asyncio.create_task(periodic_retention_cleanup())
+
+
+@app.on_event("shutdown")
+async def shutdown_retention_worker() -> None:
+    global cleanup_task
+    if cleanup_task:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
 
 # Rspamd helpers
 async def scan_with_rspamd(raw_email: bytes) -> dict:

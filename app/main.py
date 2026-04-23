@@ -9,6 +9,7 @@ from pydantic import BaseModel
 import json
 import os
 import uuid
+import logging
 import httpx
 import re
 import asyncio
@@ -33,6 +34,20 @@ CORS_DEV_MODE = os.getenv("CORS_DEV_MODE", "false").lower() == "true"
 MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 DATA_RETENTION_HOURS = float(os.getenv("DATA_RETENTION_HOURS", "0"))
 PURGE_INTERVAL_SECONDS = 5 * 60
+LOG_DIR = Path(os.getenv("LOG_DIR", "/data/logs"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+event_logger = logging.getLogger("email_processing_events")
+if not event_logger.handlers:
+    event_logger.setLevel(logging.INFO)
+    event_log_file = LOG_DIR / "email-events.log"
+    file_handler = logging.FileHandler(event_log_file, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s event=%(message)s")
+    )
+    event_logger.addHandler(file_handler)
+    event_logger.propagate = False
 
 
 app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0")
@@ -70,6 +85,19 @@ class DiffCheckRequest(BaseModel):
 cleanup_task: Optional[asyncio.Task] = None
 
 
+def log_endpoint_hit(endpoint: str, email_id: str) -> None:
+    event_logger.info("email_processed endpoint=%s email_id=%s", endpoint, email_id)
+
+
+def log_cleanup_folder_removed(folder_path: Path) -> None:
+    # Folders under EMAIL_ANALYSIS_DIR are named by email_id.
+    event_logger.info(
+        "cleanup_removed_folder endpoint=cleanup email_id=%s folder=%s",
+        folder_path.name,
+        folder_path,
+    )
+
+
 def purge_expired_analysis_data() -> dict:
     """
     Delete expired analysis artifacts from EMAIL_ANALYSIS_DIR.
@@ -104,6 +132,7 @@ def purge_expired_analysis_data() -> dict:
             if item.is_dir():
                 shutil.rmtree(item)
                 summary["deleted_directories"] += 1
+                log_cleanup_folder_removed(item)
             elif item.is_file():
                 item.unlink()
                 summary["deleted_files"] += 1
@@ -1063,6 +1092,8 @@ async def parse_email(file: UploadFile = File(...)):
             encoding="utf-8"
         )
 
+        log_endpoint_hit("analyzer", email_id)
+
         return JSONResponse(content=response)
     
     except HTTPException:
@@ -1091,6 +1122,8 @@ async def diff_check(request: DiffCheckRequest):
     """
     suspicious = load_analysis(request.suspicious_email_id)
     legitimate = load_analysis(request.legitimate_email_id)
+    log_endpoint_hit("diffCheck", request.suspicious_email_id)
+    log_endpoint_hit("diffCheck", request.legitimate_email_id)
 
     # Run comparisons
     header_diff = compare_identity_headers(suspicious, legitimate)

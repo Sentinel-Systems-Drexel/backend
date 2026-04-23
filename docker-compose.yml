@@ -12,12 +12,14 @@ services:
       - RSPAMD_HOST=rspamd
       - EMAIL_ANALYSIS_DIR=/data/email-analysis
       - MAP_CACHE_DIR=/data/maps_cache
+      - LOG_DIR=/data/logs
       - CACHE_MAPS=false
       - DATA_RETENTION_HOURS=1
       - CORS_DEV_MODE=false
     volumes:
       - ./email-analysis-data:/data/email-analysis
       - ./maps-cache:/data/maps_cache
+      - ./logs:/data/logs
     networks:
       - mailsec
     ports:

@@ -1,5 +1,7 @@
 # analysis files
-email-analysis-data/*
+email-analysis-data
+maps-cache
+logs
 
 # environment variables
 .env

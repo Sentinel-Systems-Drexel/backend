@@ -34,9 +34,12 @@ sudo docker compose up -d --build
 
 ## Persistent Email Analysis Storage
 
-Email analysis files are stored in a host-mounted directory so they persist across container restarts and rebuilds.
+Email analysis files and map cache files are stored in host-mounted directories so they persist across container restarts and rebuilds.
 
 - Host path: `./email-analysis-data`
 - Container path: `/data/email-analysis`
+- Host path: `./maps-cache`
+- Container path: `/data/maps_cache`
 
 The API writes outputs to the directory set by `EMAIL_ANALYSIS_DIR` (default: `/data/email-analysis`).
+Map images are written to the directory set by `MAP_CACHE_DIR` (default in compose: `/data/maps_cache`).

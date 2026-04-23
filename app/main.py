@@ -25,20 +25,34 @@ CACHE_MAPS = os.getenv("CACHE_MAPS", "true").lower() == "true"
 MAP_CACHE_DIR = EMAIL_ANALYSIS_DIR / "maps_cache"
 MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
+CORS_DEV_MODE = os.getenv("CORS_DEV_MODE", "false").lower() == "true"
 
 
 app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0")
 
 app.mount("/analysis-results", StaticFiles(directory=str(EMAIL_ANALYSIS_DIR)), name="analysis")
 
-# Initialize CORS middleware to allow requests from any origin (for testing purposes)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+if CORS_DEV_MODE:
+    # Initialize CORS middleware to allow requests from any origin (for testing purposes)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    # Production: restrict to sentinel-systems.cc domain
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "https://sentinel-systems.cc",
+            "https://www.sentinel-systems.cc",
+        ],
+        allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
+    )
 
 # Pydantic models
 class DiffCheckRequest(BaseModel):

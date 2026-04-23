@@ -12,6 +12,7 @@ services:
       - RSPAMD_HOST=rspamd
       - EMAIL_ANALYSIS_DIR=/data/email-analysis
       - CACHE_MAPS=false
+      - CORS_DEV_MODE=false
     volumes:
       - ./email-analysis-data:/data/email-analysis
     networks:

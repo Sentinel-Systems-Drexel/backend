@@ -26,6 +26,7 @@ MAP_CACHE_DIR = EMAIL_ANALYSIS_DIR / "maps_cache"
 MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 CORS_DEV_MODE = os.getenv("CORS_DEV_MODE", "false").lower() == "true"
+MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 
 
 app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0")
@@ -831,8 +832,26 @@ async def parse_email(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="File must be a .eml file")
     
     try:
-        # read the email file
-        content = await file.read()
+        # Read in chunks and fail fast if the upload exceeds 50 MB.
+        chunks = []
+        total_size = 0
+        chunk_size = 1024 * 1024
+
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+
+            total_size += len(chunk)
+            if total_size > MAX_UPLOAD_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="File is too large to process. Maximum allowed size is 50MB.",
+                )
+
+            chunks.append(chunk)
+
+        content = b"".join(chunks)
 
         # parse the email
         msg = BytesParser(policy=policy.default).parsebytes(content)

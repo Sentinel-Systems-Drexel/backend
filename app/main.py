@@ -32,7 +32,7 @@ MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
 CORS_DEV_MODE = os.getenv("CORS_DEV_MODE", "false").lower() == "true"
 MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
-DATA_RETENTION_HOURS = float(os.getenv("DATA_RETENTION_HOURS", "0"))
+DATA_RETENTION_MINUTES = float(os.getenv("DATA_RETENTION_MINUTES", "0"))
 PURGE_INTERVAL_SECONDS = 5 * 60
 LOG_DIR = Path(os.getenv("LOG_DIR", "/data/logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -101,22 +101,22 @@ def log_cleanup_folder_removed(folder_path: Path) -> None:
 def purge_expired_analysis_data() -> dict:
     """
     Delete expired analysis artifacts from EMAIL_ANALYSIS_DIR.
-    If DATA_RETENTION_HOURS is 0, retention is infinite and no files are deleted.
+    If DATA_RETENTION_MINUTES is 0, retention is infinite and no files are deleted.
     """
     summary = {
-        "retention_hours": DATA_RETENTION_HOURS,
+        "retention_minutes": DATA_RETENTION_MINUTES,
         "deleted_directories": 0,
         "deleted_files": 0,
         "errors": [],
     }
 
-    if DATA_RETENTION_HOURS <= 0:
+    if DATA_RETENTION_MINUTES <= 0:
         return summary
 
     if not EMAIL_ANALYSIS_DIR.exists():
         return summary
 
-    cutoff_timestamp = time.time() - (DATA_RETENTION_HOURS * 3600)
+    cutoff_timestamp = time.time() - (DATA_RETENTION_MINUTES * 60)
     legacy_maps_dir = EMAIL_ANALYSIS_DIR / "maps_cache"
 
     for item in EMAIL_ANALYSIS_DIR.iterdir():

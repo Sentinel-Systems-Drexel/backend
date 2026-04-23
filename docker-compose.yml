@@ -14,7 +14,7 @@ services:
       - MAP_CACHE_DIR=/data/maps_cache
       - LOG_DIR=/data/logs
       - CACHE_MAPS=false
-      - DATA_RETENTION_HOURS=1
+      - DATA_RETENTION_MINUTES=10
       - CORS_DEV_MODE=false
     volumes:
       - ./email-analysis-data:/data/email-analysis

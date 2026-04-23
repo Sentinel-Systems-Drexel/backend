@@ -917,6 +917,21 @@ async def parse_email(file: UploadFile = File(...)):
         except Exception as e:
             rspamd_parsed = {"error": str(e)}
 
+        # If at least one sender IP has successful reverse DNS, remove RDNS_NONE symbol and subtract its score
+        if rspamd_parsed.get("symbols"):
+            has_rdns = any(
+                isinstance(ip_detail, dict) and ip_detail.get("reverse")
+                for ip_detail in sender_ip_details
+            )
+            
+            if has_rdns and "RDNS_NONE" in rspamd_parsed["symbols"]:
+                rdns_none_score = rspamd_parsed["symbols"]["RDNS_NONE"].get("score", 0)
+                del rspamd_parsed["symbols"]["RDNS_NONE"]
+                
+                # Subtract score from total
+                if rspamd_parsed.get("score") is not None:
+                    rspamd_parsed["score"] = rspamd_parsed["score"] - rdns_none_score
+
         # Build clamav summary from results already collected in save_attachments()
         clamav_results = {
             a["filename"]: a["clamav"]

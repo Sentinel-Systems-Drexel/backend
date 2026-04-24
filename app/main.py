@@ -29,13 +29,27 @@ MAP_CACHE_DIR = Path(
     os.getenv("MAP_CACHE_DIR", str(EMAIL_ANALYSIS_DIR.parent / "maps_cache"))
 )
 MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
-CORS_DEV_MODE = os.getenv("CORS_DEV_MODE", "false").lower() == "true"
+MAPBOX_TOKEN = (os.getenv("MAPBOX_TOKEN") or "").strip()
 MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 DATA_RETENTION_MINUTES = float(os.getenv("DATA_RETENTION_MINUTES", "0"))
-PURGE_INTERVAL_SECONDS = 5 * 60
+DATA_INDEXING_MINUTES = float(os.getenv("DATA_INDEXING_MINUTES", "5"))
+PURGE_INTERVAL_SECONDS = max(DATA_INDEXING_MINUTES, 0) * 60
 LOG_DIR = Path(os.getenv("LOG_DIR", "/data/logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+def parse_cors_header(raw_header: str) -> list[str]:
+    return [item.strip() for item in raw_header.split(",") if item.strip()]
+
+
+def parse_bool(raw_value: str) -> bool:
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+CORS_ALLOW_ORIGINS = parse_cors_header(os.getenv("CORS_ALLOW_ORIGINS", "*"))
+CORE_ALLOW_CREDENTIALS = parse_bool(
+    os.getenv("CORS_ALLOW_CREDENTIALS", os.getenv("CORE_ALLOW_CREDENTIALS", "True"))
+)
+CORS_ALLOW_METHODS = parse_cors_header(os.getenv("CORS_ALLOW_METHODS", "GET, POST"))
+CORS_ALLOW_HEADERS = parse_cors_header(os.getenv("CORS_ALLOW_HEADERS", "*"))
 
 
 event_logger = logging.getLogger("email_processing_events")
@@ -54,27 +68,13 @@ app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0"
 
 app.mount("/analysis-results", StaticFiles(directory=str(EMAIL_ANALYSIS_DIR)), name="analysis")
 
-if CORS_DEV_MODE:
-    # Initialize CORS middleware to allow requests from any origin (for testing purposes)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    # Production: restrict to sentinel-systems.cc domain
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "https://sentinel-systems.cc",
-            "https://www.sentinel-systems.cc",
-        ],
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=CORE_ALLOW_CREDENTIALS,
+    allow_methods=CORS_ALLOW_METHODS,
+    allow_headers=CORS_ALLOW_HEADERS,
+)
 
 # Pydantic models
 class DiffCheckRequest(BaseModel):
@@ -145,6 +145,8 @@ def purge_expired_analysis_data() -> dict:
 async def periodic_retention_cleanup() -> None:
     while True:
         purge_expired_analysis_data()
+        if PURGE_INTERVAL_SECONDS <= 0:
+            return
         await asyncio.sleep(PURGE_INTERVAL_SECONDS)
 
 

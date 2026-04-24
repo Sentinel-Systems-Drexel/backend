@@ -15,6 +15,50 @@ Notable integrations include...
 - 32GB Disk
 - Stable 50mbps+ network connection
 
+## Technical Overview
+
+### Core Functionality
+
+- Email parsing (headers, body, attachments)
+- Spam and phishing detection
+- Malware scanning for attachments
+- Sender IP and origin analysis
+- Risk scoring using rule based detection
+- Email comparison using a Diff Checker
+
+### System Architecture
+
+![<Architecture Diagram>](https://sentinel-systems.cc/architecture-diagram.png)
+
+- **FastAPI Backend**
+    - Central orchestration layer
+    - Handles uploads, processing, and responses
+- **Rspamd**
+    - Spam filtering and scoring engine
+- **ClamAV**
+    - Malware and virus scanning for attachments
+- **Redis**
+    - Temporary data storage for processing efficiency
+- **Docker**
+    - All services run in isolated containers on a private docker network
+    - Only the API endpoint is externally accessible
+
+### Data Flow
+
+1. User uploads *.eml* file
+2. API processes the request
+3. Email is parsed into:
+    - Headers
+    - Plain text body
+    - HTML body
+    - Attachments
+4. Data is sent to:
+    - Rspamd for spam/phishing analysis
+    - ClamAV for malware scanning
+    - Sender IPs are parsed and traced to their origin
+5. Results are aggregated
+6. Risk score and analysis are returned to the user
+
 ## Installation
 
 We've made running your own instance of our API as simple as possible. Just follow the steps below.

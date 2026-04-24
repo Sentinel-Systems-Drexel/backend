@@ -29,13 +29,27 @@ MAP_CACHE_DIR = Path(
     os.getenv("MAP_CACHE_DIR", str(EMAIL_ANALYSIS_DIR.parent / "maps_cache"))
 )
 MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
-CORS_DEV_MODE = os.getenv("CORS_DEV_MODE", "false").lower() == "true"
+MAPBOX_TOKEN = (os.getenv("MAPBOX_TOKEN") or "").strip()
 MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 DATA_RETENTION_MINUTES = float(os.getenv("DATA_RETENTION_MINUTES", "0"))
-PURGE_INTERVAL_SECONDS = 5 * 60
+DATA_INDEXING_MINUTES = float(os.getenv("DATA_INDEXING_MINUTES", "5"))
+PURGE_INTERVAL_SECONDS = max(DATA_INDEXING_MINUTES, 0) * 60
 LOG_DIR = Path(os.getenv("LOG_DIR", "/data/logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+def parse_cors_header(raw_header: str) -> list[str]:
+    return [item.strip() for item in raw_header.split(",") if item.strip()]
+
+
+def parse_bool(raw_value: str) -> bool:
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+CORS_ALLOW_ORIGINS = parse_cors_header(os.getenv("CORS_ALLOW_ORIGINS", "*"))
+CORE_ALLOW_CREDENTIALS = parse_bool(
+    os.getenv("CORS_ALLOW_CREDENTIALS", os.getenv("CORE_ALLOW_CREDENTIALS", "True"))
+)
+CORS_ALLOW_METHODS = parse_cors_header(os.getenv("CORS_ALLOW_METHODS", "GET, POST"))
+CORS_ALLOW_HEADERS = parse_cors_header(os.getenv("CORS_ALLOW_HEADERS", "*"))
 
 
 event_logger = logging.getLogger("email_processing_events")
@@ -54,27 +68,13 @@ app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0"
 
 app.mount("/analysis-results", StaticFiles(directory=str(EMAIL_ANALYSIS_DIR)), name="analysis")
 
-if CORS_DEV_MODE:
-    # Initialize CORS middleware to allow requests from any origin (for testing purposes)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    # Production: restrict to sentinel-systems.cc domain
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "https://sentinel-systems.cc",
-            "https://www.sentinel-systems.cc",
-        ],
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=CORE_ALLOW_CREDENTIALS,
+    allow_methods=CORS_ALLOW_METHODS,
+    allow_headers=CORS_ALLOW_HEADERS,
+)
 
 # Pydantic models
 class DiffCheckRequest(BaseModel):
@@ -145,6 +145,8 @@ def purge_expired_analysis_data() -> dict:
 async def periodic_retention_cleanup() -> None:
     while True:
         purge_expired_analysis_data()
+        if PURGE_INTERVAL_SECONDS <= 0:
+            return
         await asyncio.sleep(PURGE_INTERVAL_SECONDS)
 
 
@@ -392,6 +394,13 @@ async def get_map_for_ip(
     """
     Handles Mapbox logic with a global cache toggle.
     """
+    if not MAPBOX_TOKEN:
+        return {
+            "status": "disabled",
+            "message": "Mapbox token is not configured; map images were not requested.",
+            "map_path": None,
+        }
+
     # 1. Define the global cache path based on IP (so multiple emails can share it)
     cache_filename = f"map_{ip.replace(':', '_')}.png"
     global_cache_path = MAP_CACHE_DIR / cache_filename
@@ -404,7 +413,11 @@ async def get_map_for_ip(
     if CACHE_MAPS and global_cache_path.exists():
         # Copy from global cache to the specific report folder
         report_map_path.write_bytes(global_cache_path.read_bytes())
-        return str(report_map_path)
+        return {
+            "status": "success",
+            "message": "Map image loaded from cache.",
+            "map_path": str(report_map_path),
+        }
 
     # 4. Fetch from Mapbox if not cached or if caching is disabled
     url = f"https://api.mapbox.com/styles/v1/mapbox/outdoors-v12/static/pin-s+ff0000({lon},{lat})/{lon},{lat},8.3/600x400@2x"
@@ -425,11 +438,25 @@ async def get_map_for_ip(
                 if CACHE_MAPS:
                     global_cache_path.write_bytes(response.content)
                 
-                return str(report_map_path)
+                return {
+                    "status": "success",
+                    "message": "Map image generated successfully.",
+                    "map_path": str(report_map_path),
+                }
+            if response.status_code in {401, 403}:
+                return {
+                    "status": "invalid_token",
+                    "message": "Mapbox token is invalid or unauthorized; map images were not generated.",
+                    "map_path": None,
+                }
         except Exception as e:
             print(f"Mapbox error: {e}")
     
-    return None
+    return {
+        "status": "error",
+        "message": "Mapbox request failed; map images were not generated.",
+        "map_path": None,
+    }
 
 def extract_body(msg: Message) -> str:
     '''
@@ -979,6 +1006,11 @@ async def parse_email(file: UploadFile = File(...)):
         headers = extract_headers(msg)
         sender_ips = extract_sender_ips(msg)
         sender_ip_details = []
+        mapbox_info = {
+            "status": "disabled" if not MAPBOX_TOKEN else "no_targets",
+            "message": "Mapbox token is not configured; map images were not requested." if not MAPBOX_TOKEN else "No sender IPs had geolocation data for map generation.",
+            "map_urls": [],
+        }
         if sender_ips:
             sender_ip_details = await asyncio.gather(
                 *(analyze_sender_ip(ip) for ip in sender_ips)
@@ -1008,20 +1040,75 @@ async def parse_email(file: UploadFile = File(...)):
 
             map_target_indices = reverse_dns_targets or fallback_targets
 
-            for map_target_index in map_target_indices:
-                target = sender_ip_details[map_target_index]
-                map_path = await get_map_for_ip(
-                    target["query"],
-                    target["lat"],
-                    target["lon"],
-                    email_id,
-                    main_dir,
-                )
-                if map_path:
-                    # Convert: /data/email-analysis/email-analysis-123/map-123-ip.png
-                    # To: /analysis-results/email-analysis-123/map-123-ip.png
-                    web_url = f"/analysis-results/{Path(map_path).relative_to(EMAIL_ANALYSIS_DIR)}"
-                    sender_ip_details[map_target_index]["map_url"] = web_url
+            if not MAPBOX_TOKEN:
+                mapbox_info = {
+                    "status": "disabled",
+                    "message": "Mapbox token is not configured; map images were not requested.",
+                    "map_urls": [],
+                }
+            elif map_target_indices:
+                map_urls = []
+                invalid_token_message = None
+                map_error_message = None
+
+                for map_target_index in map_target_indices:
+                    target = sender_ip_details[map_target_index]
+                    map_result = await get_map_for_ip(
+                        target["query"],
+                        target["lat"],
+                        target["lon"],
+                        email_id,
+                        main_dir,
+                    )
+
+                    map_status = map_result.get("status")
+                    map_path = map_result.get("map_path")
+
+                    if map_status == "invalid_token":
+                        invalid_token_message = map_result.get(
+                            "message",
+                            "Mapbox token is invalid or unauthorized; map images were not generated.",
+                        )
+                        break
+
+                    if map_status == "success" and map_path:
+                        # Convert: /data/email-analysis/email-analysis-123/map-123-ip.png
+                        # To: /analysis-results/email-analysis-123/map-123-ip.png
+                        web_url = f"/analysis-results/{Path(map_path).relative_to(EMAIL_ANALYSIS_DIR)}"
+                        sender_ip_details[map_target_index]["map_url"] = web_url
+                        map_urls.append(web_url)
+                        continue
+
+                    if map_error_message is None:
+                        map_error_message = map_result.get(
+                            "message",
+                            "Mapbox request failed; map images were not generated.",
+                        )
+
+                if invalid_token_message:
+                    mapbox_info = {
+                        "status": "invalid_token",
+                        "message": invalid_token_message,
+                        "map_urls": [],
+                    }
+                elif map_urls:
+                    mapbox_info = {
+                        "status": "success",
+                        "message": "Map images generated successfully.",
+                        "map_urls": map_urls,
+                    }
+                else:
+                    mapbox_info = {
+                        "status": "error",
+                        "message": map_error_message or "No map images were generated.",
+                        "map_urls": [],
+                    }
+            else:
+                mapbox_info = {
+                    "status": "no_targets",
+                    "message": "No sender IPs had geolocation data for map generation.",
+                    "map_urls": [],
+                }
 
         headers_file = main_dir / f"headers-{email_id}.txt"
         with open(headers_file, "w", encoding="utf-8") as f:
@@ -1084,6 +1171,7 @@ async def parse_email(file: UploadFile = File(...)):
             },
             "rspamd": rspamd_parsed,
             "clamav": clamav_results,  # Add ClamAV results to response
+            "mapbox": mapbox_info,
         }
 
         analysis_file = main_dir / f"analysis-{email_id}.json"

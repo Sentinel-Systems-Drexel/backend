@@ -11,10 +11,25 @@ services:
       - CLAMAV_HOST=clamav
       - RSPAMD_HOST=rspamd
       - EMAIL_ANALYSIS_DIR=/data/email-analysis
+      - MAP_CACHE_DIR=/data/maps_cache
+      - LOG_DIR=/data/logs
+
+      # Choose to cache map images to reduce Mapbox API requests.
       - CACHE_MAPS=false
-      - CORS_DEV_MODE=false
+      
+      # Set data retention period in minutes for analysis files. Value of 0 will save files indefinitely.
+      - DATA_RETENTION_MINUTES=10
+      - DATA_INDEXING_MINUTES=5
+      
+      # CORS options
+      - CORS_ALLOW_ORIGINS=https://sentinel-systems.cc    # NO QUOTES, SEPARATED USING ", "
+      - CORS_ALLOW_CREDENTIALS=False                      # Boolean
+      - CORS_ALLOW_METHODS=GET, POST                      # NO QUOTES, SEPARATE USING ", "
+      - CORS_ALLOW_HEADERS=Options, Content-Type          # NO QUOTES, SEPARATE USING ", "
     volumes:
       - ./email-analysis-data:/data/email-analysis
+      - ./maps-cache:/data/maps_cache
+      - ./logs:/data/logs
     networks:
       - mailsec
     ports:

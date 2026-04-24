@@ -9,9 +9,12 @@ from pydantic import BaseModel
 import json
 import os
 import uuid
+import logging
 import httpx
 import re
 import asyncio
+import shutil
+import time
 from pathlib import Path
 from typing import List, Optional
 from ipaddress import ip_address, IPv4Address, IPv6Address
@@ -22,42 +25,149 @@ RSPAMD_HOST = os.getenv("RSPAMD_HOST", "rspamd")
 CLAMAV_HOST = os.getenv("CLAMAV_HOST", "clamav")
 EMAIL_ANALYSIS_DIR = Path(os.getenv("EMAIL_ANALYSIS_DIR", "/data/email-analysis"))
 CACHE_MAPS = os.getenv("CACHE_MAPS", "true").lower() == "true"
-MAP_CACHE_DIR = EMAIL_ANALYSIS_DIR / "maps_cache"
+MAP_CACHE_DIR = Path(
+    os.getenv("MAP_CACHE_DIR", str(EMAIL_ANALYSIS_DIR.parent / "maps_cache"))
+)
 MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-MAPBOX_TOKEN = os.getenv("MAPBOX_TOKEN")
-CORS_DEV_MODE = os.getenv("CORS_DEV_MODE", "false").lower() == "true"
+MAPBOX_TOKEN = (os.getenv("MAPBOX_TOKEN") or "").strip()
+MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
+DATA_RETENTION_MINUTES = float(os.getenv("DATA_RETENTION_MINUTES", "0"))
+DATA_INDEXING_MINUTES = float(os.getenv("DATA_INDEXING_MINUTES", "5"))
+PURGE_INTERVAL_SECONDS = max(DATA_INDEXING_MINUTES, 0) * 60
+LOG_DIR = Path(os.getenv("LOG_DIR", "/data/logs"))
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+def parse_cors_header(raw_header: str) -> list[str]:
+    return [item.strip() for item in raw_header.split(",") if item.strip()]
+
+
+def parse_bool(raw_value: str) -> bool:
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+CORS_ALLOW_ORIGINS = parse_cors_header(os.getenv("CORS_ALLOW_ORIGINS", "*"))
+CORE_ALLOW_CREDENTIALS = parse_bool(
+    os.getenv("CORS_ALLOW_CREDENTIALS", os.getenv("CORE_ALLOW_CREDENTIALS", "True"))
+)
+CORS_ALLOW_METHODS = parse_cors_header(os.getenv("CORS_ALLOW_METHODS", "GET, POST"))
+CORS_ALLOW_HEADERS = parse_cors_header(os.getenv("CORS_ALLOW_HEADERS", "*"))
+
+
+event_logger = logging.getLogger("email_processing_events")
+if not event_logger.handlers:
+    event_logger.setLevel(logging.INFO)
+    event_log_file = LOG_DIR / "email-events.log"
+    file_handler = logging.FileHandler(event_log_file, encoding="utf-8")
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s event=%(message)s")
+    )
+    event_logger.addHandler(file_handler)
+    event_logger.propagate = False
 
 
 app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0")
 
 app.mount("/analysis-results", StaticFiles(directory=str(EMAIL_ANALYSIS_DIR)), name="analysis")
 
-if CORS_DEV_MODE:
-    # Initialize CORS middleware to allow requests from any origin (for testing purposes)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-else:
-    # Production: restrict to sentinel-systems.cc domain
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "https://sentinel-systems.cc",
-            "https://www.sentinel-systems.cc",
-        ],
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["*"],
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=CORE_ALLOW_CREDENTIALS,
+    allow_methods=CORS_ALLOW_METHODS,
+    allow_headers=CORS_ALLOW_HEADERS,
+)
 
 # Pydantic models
 class DiffCheckRequest(BaseModel):
     suspicious_email_id: str
     legitimate_email_id: str
+
+
+cleanup_task: Optional[asyncio.Task] = None
+
+
+def log_endpoint_hit(endpoint: str, email_id: str) -> None:
+    event_logger.info("email_processed endpoint=%s email_id=%s", endpoint, email_id)
+
+
+def log_cleanup_folder_removed(folder_path: Path) -> None:
+    # Folders under EMAIL_ANALYSIS_DIR are named by email_id.
+    event_logger.info(
+        "cleanup_removed_folder endpoint=cleanup email_id=%s folder=%s",
+        folder_path.name,
+        folder_path,
+    )
+
+
+def purge_expired_analysis_data() -> dict:
+    """
+    Delete expired analysis artifacts from EMAIL_ANALYSIS_DIR.
+    If DATA_RETENTION_MINUTES is 0, retention is infinite and no files are deleted.
+    """
+    summary = {
+        "retention_minutes": DATA_RETENTION_MINUTES,
+        "deleted_directories": 0,
+        "deleted_files": 0,
+        "errors": [],
+    }
+
+    if DATA_RETENTION_MINUTES <= 0:
+        return summary
+
+    if not EMAIL_ANALYSIS_DIR.exists():
+        return summary
+
+    cutoff_timestamp = time.time() - (DATA_RETENTION_MINUTES * 60)
+    legacy_maps_dir = EMAIL_ANALYSIS_DIR / "maps_cache"
+
+    for item in EMAIL_ANALYSIS_DIR.iterdir():
+        try:
+            # Never delete current or legacy map cache directory.
+            if item.resolve() in {MAP_CACHE_DIR.resolve(), legacy_maps_dir.resolve()}:
+                continue
+
+            item_age_timestamp = item.stat().st_mtime
+            if item_age_timestamp > cutoff_timestamp:
+                continue
+
+            if item.is_dir():
+                shutil.rmtree(item)
+                summary["deleted_directories"] += 1
+                log_cleanup_folder_removed(item)
+            elif item.is_file():
+                item.unlink()
+                summary["deleted_files"] += 1
+        except Exception as e:
+            summary["errors"].append(f"{item}: {e}")
+
+    return summary
+
+
+async def periodic_retention_cleanup() -> None:
+    while True:
+        purge_expired_analysis_data()
+        if PURGE_INTERVAL_SECONDS <= 0:
+            return
+        await asyncio.sleep(PURGE_INTERVAL_SECONDS)
+
+
+@app.on_event("startup")
+async def startup_retention_worker() -> None:
+    global cleanup_task
+    EMAIL_ANALYSIS_DIR.mkdir(parents=True, exist_ok=True)
+    MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    purge_expired_analysis_data()
+    cleanup_task = asyncio.create_task(periodic_retention_cleanup())
+
+
+@app.on_event("shutdown")
+async def shutdown_retention_worker() -> None:
+    global cleanup_task
+    if cleanup_task:
+        cleanup_task.cancel()
+        try:
+            await cleanup_task
+        except asyncio.CancelledError:
+            pass
 
 # Rspamd helpers
 async def scan_with_rspamd(raw_email: bytes) -> dict:
@@ -284,6 +394,13 @@ async def get_map_for_ip(
     """
     Handles Mapbox logic with a global cache toggle.
     """
+    if not MAPBOX_TOKEN:
+        return {
+            "status": "disabled",
+            "message": "Mapbox token is not configured; map images were not requested.",
+            "map_path": None,
+        }
+
     # 1. Define the global cache path based on IP (so multiple emails can share it)
     cache_filename = f"map_{ip.replace(':', '_')}.png"
     global_cache_path = MAP_CACHE_DIR / cache_filename
@@ -296,7 +413,11 @@ async def get_map_for_ip(
     if CACHE_MAPS and global_cache_path.exists():
         # Copy from global cache to the specific report folder
         report_map_path.write_bytes(global_cache_path.read_bytes())
-        return str(report_map_path)
+        return {
+            "status": "success",
+            "message": "Map image loaded from cache.",
+            "map_path": str(report_map_path),
+        }
 
     # 4. Fetch from Mapbox if not cached or if caching is disabled
     url = f"https://api.mapbox.com/styles/v1/mapbox/outdoors-v12/static/pin-s+ff0000({lon},{lat})/{lon},{lat},8.3/600x400@2x"
@@ -317,11 +438,25 @@ async def get_map_for_ip(
                 if CACHE_MAPS:
                     global_cache_path.write_bytes(response.content)
                 
-                return str(report_map_path)
+                return {
+                    "status": "success",
+                    "message": "Map image generated successfully.",
+                    "map_path": str(report_map_path),
+                }
+            if response.status_code in {401, 403}:
+                return {
+                    "status": "invalid_token",
+                    "message": "Mapbox token is invalid or unauthorized; map images were not generated.",
+                    "map_path": None,
+                }
         except Exception as e:
             print(f"Mapbox error: {e}")
     
-    return None
+    return {
+        "status": "error",
+        "message": "Mapbox request failed; map images were not generated.",
+        "map_path": None,
+    }
 
 def extract_body(msg: Message) -> str:
     '''
@@ -831,8 +966,26 @@ async def parse_email(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="File must be a .eml file")
     
     try:
-        # read the email file
-        content = await file.read()
+        # Read in chunks and fail fast if the upload exceeds 50 MB.
+        chunks = []
+        total_size = 0
+        chunk_size = 1024 * 1024
+
+        while True:
+            chunk = await file.read(chunk_size)
+            if not chunk:
+                break
+
+            total_size += len(chunk)
+            if total_size > MAX_UPLOAD_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail="File is too large to process. Maximum allowed size is 50MB.",
+                )
+
+            chunks.append(chunk)
+
+        content = b"".join(chunks)
 
         # parse the email
         msg = BytesParser(policy=policy.default).parsebytes(content)
@@ -853,6 +1006,11 @@ async def parse_email(file: UploadFile = File(...)):
         headers = extract_headers(msg)
         sender_ips = extract_sender_ips(msg)
         sender_ip_details = []
+        mapbox_info = {
+            "status": "disabled" if not MAPBOX_TOKEN else "no_targets",
+            "message": "Mapbox token is not configured; map images were not requested." if not MAPBOX_TOKEN else "No sender IPs had geolocation data for map generation.",
+            "map_urls": [],
+        }
         if sender_ips:
             sender_ip_details = await asyncio.gather(
                 *(analyze_sender_ip(ip) for ip in sender_ips)
@@ -882,20 +1040,75 @@ async def parse_email(file: UploadFile = File(...)):
 
             map_target_indices = reverse_dns_targets or fallback_targets
 
-            for map_target_index in map_target_indices:
-                target = sender_ip_details[map_target_index]
-                map_path = await get_map_for_ip(
-                    target["query"],
-                    target["lat"],
-                    target["lon"],
-                    email_id,
-                    main_dir,
-                )
-                if map_path:
-                    # Convert: /data/email-analysis/email-analysis-123/map-123-ip.png
-                    # To: /analysis-results/email-analysis-123/map-123-ip.png
-                    web_url = f"/analysis-results/{Path(map_path).relative_to(EMAIL_ANALYSIS_DIR)}"
-                    sender_ip_details[map_target_index]["map_url"] = web_url
+            if not MAPBOX_TOKEN:
+                mapbox_info = {
+                    "status": "disabled",
+                    "message": "Mapbox token is not configured; map images were not requested.",
+                    "map_urls": [],
+                }
+            elif map_target_indices:
+                map_urls = []
+                invalid_token_message = None
+                map_error_message = None
+
+                for map_target_index in map_target_indices:
+                    target = sender_ip_details[map_target_index]
+                    map_result = await get_map_for_ip(
+                        target["query"],
+                        target["lat"],
+                        target["lon"],
+                        email_id,
+                        main_dir,
+                    )
+
+                    map_status = map_result.get("status")
+                    map_path = map_result.get("map_path")
+
+                    if map_status == "invalid_token":
+                        invalid_token_message = map_result.get(
+                            "message",
+                            "Mapbox token is invalid or unauthorized; map images were not generated.",
+                        )
+                        break
+
+                    if map_status == "success" and map_path:
+                        # Convert: /data/email-analysis/email-analysis-123/map-123-ip.png
+                        # To: /analysis-results/email-analysis-123/map-123-ip.png
+                        web_url = f"/analysis-results/{Path(map_path).relative_to(EMAIL_ANALYSIS_DIR)}"
+                        sender_ip_details[map_target_index]["map_url"] = web_url
+                        map_urls.append(web_url)
+                        continue
+
+                    if map_error_message is None:
+                        map_error_message = map_result.get(
+                            "message",
+                            "Mapbox request failed; map images were not generated.",
+                        )
+
+                if invalid_token_message:
+                    mapbox_info = {
+                        "status": "invalid_token",
+                        "message": invalid_token_message,
+                        "map_urls": [],
+                    }
+                elif map_urls:
+                    mapbox_info = {
+                        "status": "success",
+                        "message": "Map images generated successfully.",
+                        "map_urls": map_urls,
+                    }
+                else:
+                    mapbox_info = {
+                        "status": "error",
+                        "message": map_error_message or "No map images were generated.",
+                        "map_urls": [],
+                    }
+            else:
+                mapbox_info = {
+                    "status": "no_targets",
+                    "message": "No sender IPs had geolocation data for map generation.",
+                    "map_urls": [],
+                }
 
         headers_file = main_dir / f"headers-{email_id}.txt"
         with open(headers_file, "w", encoding="utf-8") as f:
@@ -916,6 +1129,21 @@ async def parse_email(file: UploadFile = File(...)):
             rspamd_parsed = parse_rspamd_response(rspamd_raw)
         except Exception as e:
             rspamd_parsed = {"error": str(e)}
+
+        # If at least one sender IP has successful reverse DNS, remove RDNS_NONE symbol and subtract its score
+        if rspamd_parsed.get("symbols"):
+            has_rdns = any(
+                isinstance(ip_detail, dict) and ip_detail.get("reverse")
+                for ip_detail in sender_ip_details
+            )
+            
+            if has_rdns and "RDNS_NONE" in rspamd_parsed["symbols"]:
+                rdns_none_score = rspamd_parsed["symbols"]["RDNS_NONE"].get("score", 0)
+                del rspamd_parsed["symbols"]["RDNS_NONE"]
+                
+                # Subtract score from total
+                if rspamd_parsed.get("score") is not None:
+                    rspamd_parsed["score"] = rspamd_parsed["score"] - rdns_none_score
 
         # Build clamav summary from results already collected in save_attachments()
         clamav_results = {
@@ -943,6 +1171,7 @@ async def parse_email(file: UploadFile = File(...)):
             },
             "rspamd": rspamd_parsed,
             "clamav": clamav_results,  # Add ClamAV results to response
+            "mapbox": mapbox_info,
         }
 
         analysis_file = main_dir / f"analysis-{email_id}.json"
@@ -950,6 +1179,8 @@ async def parse_email(file: UploadFile = File(...)):
             json.dumps(response, indent=2, default=str),
             encoding="utf-8"
         )
+
+        log_endpoint_hit("analyzer", email_id)
 
         return JSONResponse(content=response)
     
@@ -979,6 +1210,8 @@ async def diff_check(request: DiffCheckRequest):
     """
     suspicious = load_analysis(request.suspicious_email_id)
     legitimate = load_analysis(request.legitimate_email_id)
+    log_endpoint_hit("diffCheck", request.suspicious_email_id)
+    log_endpoint_hit("diffCheck", request.legitimate_email_id)
 
     # Run comparisons
     header_diff = compare_identity_headers(suspicious, legitimate)

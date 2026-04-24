@@ -22,7 +22,7 @@ services:
       - DATA_INDEXING_MINUTES=5
       
       # CORS options
-      - CORS_ALLOW_ORIGINS=https://sentinel-systems.cc    # NO QUOTES, SEPARATED USING ", "
+      - CORS_ALLOW_ORIGINS=https://sentinel-systems.cc    # NO QUOTES, SEPARATE USING ", "
       - CORS_ALLOW_CREDENTIALS=False                      # Boolean
       - CORS_ALLOW_METHODS=GET, POST                      # NO QUOTES, SEPARATE USING ", "
       - CORS_ALLOW_HEADERS=Options, Content-Type          # NO QUOTES, SEPARATE USING ", "

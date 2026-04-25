@@ -1248,7 +1248,11 @@ async def diff_check(request: DiffCheckRequest):
 
     return JSONResponse(content=diff_report)
         
-
+@app.get("/max-upload-size")
+def return_max_upload_size():
+    return {
+        "maxUploadSizeMB": MAX_UPLOAD_SIZE_MB_STR,
+    }
 
 @app.get("/")
 def read_root():

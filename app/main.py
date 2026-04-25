@@ -65,7 +65,7 @@ if not event_logger.handlers:
     event_logger.propagate = False
 
 
-app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0")
+app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.9.0")
 
 app.mount("/analysis-results", StaticFiles(directory=str(EMAIL_ANALYSIS_DIR)), name="analysis")
 

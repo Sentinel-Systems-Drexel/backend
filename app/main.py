@@ -30,7 +30,6 @@ MAP_CACHE_DIR = Path(
 )
 MAP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MAPBOX_TOKEN = (os.getenv("MAPBOX_TOKEN") or "").strip()
-MAX_UPLOAD_SIZE_BYTES = 50 * 1024 * 1024
 DATA_RETENTION_MINUTES = float(os.getenv("DATA_RETENTION_MINUTES", "0"))
 DATA_INDEXING_MINUTES = float(os.getenv("DATA_INDEXING_MINUTES", "5"))
 PURGE_INTERVAL_SECONDS = max(DATA_INDEXING_MINUTES, 0) * 60
@@ -51,6 +50,8 @@ CORE_ALLOW_CREDENTIALS = parse_bool(
 CORS_ALLOW_METHODS = parse_cors_header(os.getenv("CORS_ALLOW_METHODS", "GET, POST"))
 CORS_ALLOW_HEADERS = parse_cors_header(os.getenv("CORS_ALLOW_HEADERS", "*"))
 
+MAX_UPLOAD_SIZE_MB_STR = os.getenv("MAX_UPLOAD_SIZE_MB", "5")
+MAX_UPLOAD_SIZE_BYTES = int(float(MAX_UPLOAD_SIZE_MB_STR) * 1024 * 1024)
 
 event_logger = logging.getLogger("email_processing_events")
 if not event_logger.handlers:
@@ -64,7 +65,7 @@ if not event_logger.handlers:
     event_logger.propagate = False
 
 
-app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.8.0")
+app = FastAPI(title="FastAPI Orchestration Layer Daemon (FOLD)", version="0.9.0")
 
 app.mount("/analysis-results", StaticFiles(directory=str(EMAIL_ANALYSIS_DIR)), name="analysis")
 
@@ -1247,7 +1248,11 @@ async def diff_check(request: DiffCheckRequest):
 
     return JSONResponse(content=diff_report)
         
-
+@app.get("/max-upload-size")
+def return_max_upload_size():
+    return {
+        "maxUploadSizeMB": MAX_UPLOAD_SIZE_MB_STR,
+    }
 
 @app.get("/")
 def read_root():

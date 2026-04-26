@@ -29,12 +29,15 @@ jobs:
             --exclude='node_modules' \
             --exclude='.env' \
             --exclude='email-analysis-data' \
+            --exclude='maps-cache' \
+            --exclude='logs' \
             ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/opt/repos/
 
       - name: Deploy via Docker Compose
         run: |
           ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
             cd /opt/repos
+            mkdir -p email-analysis-data maps-cache logs
             docker compose pull
             docker compose up -d --build --remove-orphans
             docker image prune -f

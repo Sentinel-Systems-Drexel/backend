@@ -20,9 +20,12 @@ services:
       # Set data retention period in minutes for analysis files. Value of 0 will save files indefinitely.
       - DATA_RETENTION_MINUTES=10
       - DATA_INDEXING_MINUTES=5
+
+      # Set the maximum allowed upload size in megabytes.
+      - MAX_UPLOAD_SIZE_MB=10
       
       # CORS options
-      - CORS_ALLOW_ORIGINS=https://sentinel-systems.cc    # NO QUOTES, SEPARATED USING ", "
+      - CORS_ALLOW_ORIGINS=https://sentinel-systems.cc    # NO QUOTES, SEPARATE USING ", "
       - CORS_ALLOW_CREDENTIALS=False                      # Boolean
       - CORS_ALLOW_METHODS=GET, POST                      # NO QUOTES, SEPARATE USING ", "
       - CORS_ALLOW_HEADERS=Options, Content-Type          # NO QUOTES, SEPARATE USING ", "
